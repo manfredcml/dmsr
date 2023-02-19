@@ -1,10 +1,12 @@
-use std::time::SystemTime;
 use crate::source::source::Source;
+use crate::source::config::Config;
+use std::task::Poll;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, NoTls, Socket, Row, SimpleQueryMessage, SimpleQueryRow};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::{future, StreamExt, Sink, ready};
-use crate::source::config::Config;
 
 pub struct PostgresSource {
   endpoint: String,
@@ -99,13 +101,72 @@ impl PostgresSource {
       .await?;
 
     let mut duplex_stream_pin = Box::pin(duplex_stream);
-    
+
     loop {
-      let event_res_opt = match duplex_stream_pin.as_mut().next().await {
+      let event = match duplex_stream_pin.as_mut().next().await {
         Some(event_res) => event_res,
         None => break,
       }?;
-      println!("{:?}", event_res_opt)
+
+      println!("{:?}", event);
+
+      match event[0] {
+        b'w' => {
+          println!("Got XLogData/data-change event: {:?}", event);
+        }
+        b'k' => {
+          let last_byte = match event.last() {
+            Some(last_byte) => last_byte,
+            None => continue,
+          };
+          let timeout_imminent = last_byte == &1;
+          if !timeout_imminent {
+            continue;
+          }
+
+          const SECONDS_FROM_UNIX_EPOCH_TO_2000: u128 = 946684800;
+          let since_unix_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+          let time_since_2000: u64 = (since_unix_epoch - (SECONDS_FROM_UNIX_EPOCH_TO_2000 * 1000 * 1000)).try_into().unwrap();
+
+          // see here for format details: https://www.postgresql.org/docs/10/protocol-replication.html
+          let mut data_to_send: Vec<u8> = vec![];
+          // Byte1('r'); Identifies the message as a receiver status update.
+          data_to_send.extend_from_slice(&[114]); // "r" in ascii
+          // The location of the last WAL byte + 1 received and written to disk in the standby.
+          data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+          // The location of the last WAL byte + 1 flushed to disk in the standby.
+          data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+          // The location of the last WAL byte + 1 applied in the standby.
+          data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+          // The client's system clock at the time of transmission, as microseconds since midnight on 2000-01-01.
+          //0, 0, 0, 0, 0, 0, 0, 0,
+          data_to_send.extend_from_slice(&time_since_2000.to_be_bytes());
+          // Byte1; If 1, the client requests the server to reply to this message immediately. This can be used to ping the server, to test if the connection is still healthy.
+          data_to_send.extend_from_slice(&[1]);
+
+          let buf = Bytes::from(data_to_send);
+
+          println!("Trying to send response to keepalive message/warning!:{:x?}", buf);
+          let mut next_step = 1;
+          future::poll_fn(|cx| {
+            loop {
+              println!("Doing step:{}", next_step);
+              match next_step {
+                1 => { ready!(duplex_stream_pin.as_mut().poll_ready(cx)).unwrap(); }
+                2 => { duplex_stream_pin.as_mut().start_send(buf.clone()).unwrap(); }
+                3 => { ready!(duplex_stream_pin.as_mut().poll_flush(cx)).unwrap(); }
+                4 => { return Poll::Ready(()); }
+                _ => panic!(),
+              }
+              next_step += 1;
+            }
+          }).await;
+          println!("Sent response to keepalive message/warning!:{:x?}", buf);
+        }
+        _ => {
+          continue;
+        }
+      }
     }
 
     Ok(())
@@ -124,9 +185,5 @@ mod tests {
     });
     source.connect().await.expect("Failed to connect to Postgres");
     source.stream().await.expect("Failed to stream Postgres");
-    // let _: Vec<Row> = source
-    //   .query("SELECT * FROM public.test_tbl".to_string())
-    //   .await
-    //   .expect("Failed to query Postgres");
   }
 }
