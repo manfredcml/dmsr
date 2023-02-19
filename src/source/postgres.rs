@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use futures::{future, StreamExt, Sink, ready};
 use crate::source::config::Config;
 
-struct PostgresSource {
+pub struct PostgresSource {
   endpoint: String,
   client: Option<Client>,
 }
@@ -54,7 +54,7 @@ impl Source for PostgresSource {
 }
 
 impl PostgresSource {
-  async fn stream(&mut self) -> Result<()> {
+  pub async fn stream(&mut self) -> Result<()> {
     let client = match self.client.as_mut() {
       Some(client) => client,
       None => return Err(anyhow!("Failed to connect to Postgres")),
@@ -88,24 +88,18 @@ impl PostgresSource {
       None => return Err(anyhow!("Failed to get LSN")),
     };
 
-    println!("LSN: {}", lsn);
-
     let query = format!(
       "START_REPLICATION SLOT {} LOGICAL {}",
       slot_name,
       lsn
     );
 
-    println!("Starting replication stream... {}", query);
-
     let duplex_stream = client
       .copy_both_simple::<bytes::Bytes>(&query)
       .await?;
 
     let mut duplex_stream_pin = Box::pin(duplex_stream);
-
-    println!("Starting replication stream...");
-
+    
     loop {
       let event_res_opt = match duplex_stream_pin.as_mut().next().await {
         Some(event_res) => event_res,

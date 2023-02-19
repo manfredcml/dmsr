@@ -1,3 +1,3 @@
-mod source;
-mod config;
-mod postgres;
+pub mod source;
+pub mod config;
+pub mod postgres;
