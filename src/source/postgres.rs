@@ -8,6 +8,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{future, StreamExt, Sink, ready};
+use serde_json::Value;
 
 pub struct PostgresSource {
   endpoint: String,
@@ -109,13 +110,14 @@ impl Source for PostgresSource {
 
       match event[0] {
         b'w' => {
-          println!("Got XLogData/data-change event: {:?}", event);
+          let e = Self::parse_event(event)?;
+          println!("Got event: {:?}", e["change"]);
         }
         b'k' => {
           Self::keep_alive(event, &mut duplex_stream_pin).await?;
         }
         _ => {
-          continue;
+          println!("Not recognized: {:?}", event);
         }
       }
     }
@@ -125,6 +127,14 @@ impl Source for PostgresSource {
 }
 
 impl PostgresSource {
+  fn parse_event(event: Bytes) -> Result<Value> {
+    let b = &event[25..];
+    let s = std::str::from_utf8(b)?;
+    println!("Got XLogData/wal2json event: {}", s);
+    let v: Value = serde_json::from_str(s)?;
+    Ok(v)
+  }
+
   async fn keep_alive(event: Bytes,
                       duplex_stream_pin: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
   ) -> Result<()> {
