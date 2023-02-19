@@ -10,4 +10,5 @@ pub trait Source {
   fn get_endpoint(&self) -> &String;
   async fn connect(&mut self) -> Result<()>;
   async fn query(&mut self, query: String) -> Result<Vec<Self::Output>>;
+  async fn stream(&mut self) -> Result<()>;
 }

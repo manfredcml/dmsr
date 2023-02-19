@@ -1,8 +1,9 @@
+use std::pin::Pin;
 use crate::source::source::Source;
 use crate::source::config::Config;
 use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio_postgres::{Client, NoTls, Socket, Row, SimpleQueryMessage, SimpleQueryRow};
+use tokio_postgres::{Client, NoTls, Row, SimpleQueryMessage, SimpleQueryRow, CopyBothDuplex};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -53,10 +54,8 @@ impl Source for PostgresSource {
     let rows: Vec<Row> = client.query(query.as_str(), &[]).await?;
     return Ok(rows);
   }
-}
 
-impl PostgresSource {
-  pub async fn stream(&mut self) -> Result<()> {
+  async fn stream(&mut self) -> Result<()> {
     let client = match self.client.as_mut() {
       Some(client) => client,
       None => return Err(anyhow!("Failed to connect to Postgres")),
@@ -97,7 +96,7 @@ impl PostgresSource {
     );
 
     let duplex_stream = client
-      .copy_both_simple::<bytes::Bytes>(&query)
+      .copy_both_simple::<Bytes>(&query)
       .await?;
 
     let mut duplex_stream_pin = Box::pin(duplex_stream);
@@ -108,66 +107,72 @@ impl PostgresSource {
         None => break,
       }?;
 
-      println!("{:?}", event);
-
       match event[0] {
         b'w' => {
           println!("Got XLogData/data-change event: {:?}", event);
         }
         b'k' => {
-          let last_byte = match event.last() {
-            Some(last_byte) => last_byte,
-            None => continue,
-          };
-          let timeout_imminent = last_byte == &1;
-          if !timeout_imminent {
-            continue;
-          }
-
-          const SECONDS_FROM_UNIX_EPOCH_TO_2000: u128 = 946684800;
-          let since_unix_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
-          let time_since_2000: u64 = (since_unix_epoch - (SECONDS_FROM_UNIX_EPOCH_TO_2000 * 1000 * 1000)).try_into().unwrap();
-
-          // see here for format details: https://www.postgresql.org/docs/10/protocol-replication.html
-          let mut data_to_send: Vec<u8> = vec![];
-          // Byte1('r'); Identifies the message as a receiver status update.
-          data_to_send.extend_from_slice(&[114]); // "r" in ascii
-          // The location of the last WAL byte + 1 received and written to disk in the standby.
-          data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-          // The location of the last WAL byte + 1 flushed to disk in the standby.
-          data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-          // The location of the last WAL byte + 1 applied in the standby.
-          data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-          // The client's system clock at the time of transmission, as microseconds since midnight on 2000-01-01.
-          //0, 0, 0, 0, 0, 0, 0, 0,
-          data_to_send.extend_from_slice(&time_since_2000.to_be_bytes());
-          // Byte1; If 1, the client requests the server to reply to this message immediately. This can be used to ping the server, to test if the connection is still healthy.
-          data_to_send.extend_from_slice(&[1]);
-
-          let buf = Bytes::from(data_to_send);
-
-          println!("Trying to send response to keepalive message/warning!:{:x?}", buf);
-          let mut next_step = 1;
-          future::poll_fn(|cx| {
-            loop {
-              println!("Doing step:{}", next_step);
-              match next_step {
-                1 => { ready!(duplex_stream_pin.as_mut().poll_ready(cx)).unwrap(); }
-                2 => { duplex_stream_pin.as_mut().start_send(buf.clone()).unwrap(); }
-                3 => { ready!(duplex_stream_pin.as_mut().poll_flush(cx)).unwrap(); }
-                4 => { return Poll::Ready(()); }
-                _ => panic!(),
-              }
-              next_step += 1;
-            }
-          }).await;
-          println!("Sent response to keepalive message/warning!:{:x?}", buf);
+          Self::keep_alive(event, &mut duplex_stream_pin).await?;
         }
         _ => {
           continue;
         }
       }
     }
+
+    Ok(())
+  }
+}
+
+impl PostgresSource {
+  async fn keep_alive(event: Bytes,
+                      duplex_stream_pin: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
+  ) -> Result<()> {
+    let last_byte = match event.last() {
+      Some(last_byte) => last_byte,
+      None => return Ok(()),
+    };
+    let timeout_imminent = last_byte == &1;
+    if !timeout_imminent {
+      return Ok(());
+    }
+
+    const SECONDS_FROM_UNIX_EPOCH_TO_2000: u128 = 946684800;
+    let since_unix_epoch = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
+    let seconds_from_unix_to_2000 = (SECONDS_FROM_UNIX_EPOCH_TO_2000 * 1000 * 1000) as u128;
+    let time_since_2000: u64 = (since_unix_epoch - seconds_from_unix_to_2000).try_into()?;
+
+    // see here for format details: https://www.postgresql.org/docs/10/protocol-replication.html
+    let mut data_to_send: Vec<u8> = vec![];
+    // Byte1('r'); Identifies the message as a receiver status update.
+    data_to_send.extend_from_slice(&[114]); // "r" in ascii
+    // The location of the last WAL byte + 1 received and written to disk in the standby.
+    data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+    // The location of the last WAL byte + 1 flushed to disk in the standby.
+    data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+    // The location of the last WAL byte + 1 applied in the standby.
+    data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+    // The client's system clock at the time of transmission, as microseconds since midnight on 2000-01-01.
+    //0, 0, 0, 0, 0, 0, 0, 0,
+    data_to_send.extend_from_slice(&time_since_2000.to_be_bytes());
+    // Byte1; If 1, the client requests the server to reply to this message immediately. This can be used to ping the server, to test if the connection is still healthy.
+    data_to_send.extend_from_slice(&[1]);
+
+    let buf = Bytes::from(data_to_send);
+
+    let mut next_step = 1;
+    future::poll_fn(|cx| {
+      loop {
+        match next_step {
+          1 => { ready!(duplex_stream_pin.as_mut().poll_ready(cx)).unwrap(); }
+          2 => { duplex_stream_pin.as_mut().start_send(buf.clone()).unwrap(); }
+          3 => { ready!(duplex_stream_pin.as_mut().poll_flush(cx)).unwrap(); }
+          4 => { return Poll::Ready(()); }
+          _ => panic!(),
+        }
+        next_step += 1;
+      }
+    }).await;
 
     Ok(())
   }
