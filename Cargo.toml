@@ -7,4 +7,4 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.69"
-postgres = "0.19.4"
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

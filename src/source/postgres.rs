@@ -1,6 +1,6 @@
 use crate::source::base::Source;
-use postgres::{Client, NoTls};
-use anyhow::Result;
+use postgres::{Client, NoTls, Row};
+use anyhow::{Result, anyhow};
 
 struct PostgresSource {
   endpoint: String,
@@ -18,9 +18,24 @@ impl Source for PostgresSource {
 
   fn connect(&mut self) -> Result<()> {
     // Connect to the database and assign to self.client
-    let client = Client::connect("", NoTls)?;
+    println!("Connecting to {}", self.endpoint.as_str());
+    let client = Client::connect(
+      self.endpoint.as_str(),
+      NoTls,
+    )?;
     self.client = Some(client);
     Ok(())
+  }
+
+  fn query<Row>(&mut self, query: String) -> Result<Vec<Row>> {
+    let client = match self.client.as_mut() {
+      Some(client) => client,
+      None => return Err(anyhow!("Failed to connect to Postgres")),
+    };
+    for row in client.query(query.as_str(), &[]) {
+      println!("Row: {:?}", row);
+    }
+    return Ok(vec![]);
   }
 }
 
@@ -30,7 +45,11 @@ mod tests {
 
   #[test]
   fn it_works() {
-    // let result = add(2, 2);
-    assert_eq!(4, 4);
+    let conn_str = "host=localhost user=postgres password=kbP4ZyAyEQ";
+    let mut source = PostgresSource::new(conn_str.to_string());
+    source.connect().expect("Failed to connect to Postgres");
+    let _: Vec<Row> = source
+      .query("SELECT * FROM public.test_tbl".to_string())
+      .expect("Failed to query Postgres");
   }
 }
