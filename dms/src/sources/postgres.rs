@@ -11,28 +11,28 @@ use futures::{future, StreamExt, Sink, ready};
 use serde_json::Value;
 
 pub struct PostgresSource {
-  endpoint: String,
+  config: Config,
   client: Option<Client>,
 }
 
 #[async_trait]
 impl Source for PostgresSource {
-  type Output = Row;
+  type QueryRow = Row;
 
   fn new(config: Config) -> Self {
     PostgresSource {
-      endpoint: config.endpoint,
+      config,
       client: None,
     }
   }
 
-  fn get_endpoint(&self) -> &String {
-    &self.endpoint
+  fn get_config(&self) -> &Config {
+    &self.config
   }
 
   async fn connect(&mut self) -> Result<()> {
     let (client, connection) = tokio_postgres::connect(
-      self.endpoint.as_str(),
+      self.config.endpoint.as_str(),
       NoTls,
     ).await?;
 

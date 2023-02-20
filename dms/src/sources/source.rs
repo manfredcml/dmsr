@@ -4,11 +4,12 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait Source {
-  type Output;
+  type QueryRow;
 
   fn new(config: Config) -> Self;
-  fn get_endpoint(&self) -> &String;
+  fn get_config(&self) -> &Config;
+
   async fn connect(&mut self) -> Result<()>;
-  async fn query(&mut self, query: String) -> Result<Vec<Self::Output>>;
+  async fn query(&mut self, query: String) -> Result<Vec<Self::QueryRow>>;
   async fn stream(&mut self) -> Result<()>;
 }
