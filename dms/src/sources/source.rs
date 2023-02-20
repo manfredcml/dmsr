@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crate::source::config::Config;
+use crate::sources::config::Config;
 use async_trait::async_trait;
 
 #[async_trait]

@@ -1,3 +1,3 @@
 extern crate core;
 
-pub mod source;
+pub mod sources;

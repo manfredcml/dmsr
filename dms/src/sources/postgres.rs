@@ -1,6 +1,6 @@
 use std::pin::Pin;
-use crate::source::source::Source;
-use crate::source::config::Config;
+use crate::sources::source::Source;
+use crate::sources::config::Config;
 use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, NoTls, Row, SimpleQueryMessage, SimpleQueryRow, CopyBothDuplex};
