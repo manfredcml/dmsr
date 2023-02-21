@@ -2,4 +2,5 @@
 members = [
     "dms",
     "examples",
+    "app"
 ]
