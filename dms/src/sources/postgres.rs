@@ -7,8 +7,12 @@ use tokio_postgres::{Client, NoTls, Row, SimpleQueryMessage, SimpleQueryRow, Cop
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{future, StreamExt, Sink, ready};
-use serde_json::Value;
+use futures::{future, StreamExt, Sink, ready, SinkExt};
+use tokio::sync::mpsc::Sender;
+use crate::events::event_type::EventType;
+use crate::events::postgres_event::PostgresEvent;
+use crate::events::standardized_event::Event;
+use crate::sources::source_type::SourceType;
 
 pub struct PostgresSource {
   config: Config,
@@ -46,17 +50,7 @@ impl Source for PostgresSource {
     Ok(())
   }
 
-  async fn query(&mut self, query: String) -> Result<Vec<Row>> {
-    let client = match self.client.as_mut() {
-      Some(client) => client,
-      None => return Err(anyhow!("Failed to connect to Postgres")),
-    };
-
-    let rows: Vec<Row> = client.query(query.as_str(), &[]).await?;
-    return Ok(rows);
-  }
-
-  async fn stream(&mut self) -> Result<()> {
+  async fn stream(&mut self, tx: &mut Sender<Event>) -> Result<()> {
     let client = match self.client.as_mut() {
       Some(client) => client,
       None => return Err(anyhow!("Failed to connect to Postgres")),
@@ -111,6 +105,7 @@ impl Source for PostgresSource {
       match event[0] {
         b'w' => {
           let e = Self::parse_event(event)?;
+          tx.send(e).await?;
         }
         b'k' => {
           Self::keep_alive(event, &mut duplex_stream_pin).await?;
@@ -126,12 +121,22 @@ impl Source for PostgresSource {
 }
 
 impl PostgresSource {
-  fn parse_event(event: Bytes) -> Result<Value> {
+  fn parse_event(event: Bytes) -> Result<Event> {
     let b = &event[25..];
     let s = std::str::from_utf8(b)?;
     println!("{}", s);
-    let v: Value = serde_json::from_str(s)?;
-    Ok(v)
+
+    let raw_event: PostgresEvent = serde_json::from_str(s)?;
+    println!("{:?}", raw_event);
+
+    let event = Event {
+      source_type: SourceType::Postgres,
+      event_type: EventType::Insert,
+      schema: "schema".to_string(),
+      table: "table".to_string(),
+    };
+
+    Ok(event)
   }
 
   async fn keep_alive(event: Bytes,

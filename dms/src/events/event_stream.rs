@@ -1,7 +1,16 @@
-use futures::channel::mpsc::{Receiver, Sender};
-use crate::streamers::event::Event;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
+use crate::events::standardized_event::Event;
 
 pub struct DataStream {
-  tx: Sender<Event>,
-  rx: Receiver<Event>,
+  pub tx: Sender<Event>,
+  pub rx: Receiver<Event>,
+}
+
+impl DataStream {
+  pub fn new() -> Self {
+    let (tx, rx) = channel(
+      100
+    );
+    DataStream { tx, rx }
+  }
 }

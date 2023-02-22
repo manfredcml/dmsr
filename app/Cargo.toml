@@ -10,5 +10,6 @@ anyhow = "1.0.69"
 clap = { version = "4.1.6", features = ["derive"] }
 dms = { path = "../dms" }
 env_logger = "0.10.0"
+futures = "0.3.26"
 log = "0.4.17"
 tokio = "1.25.0"
