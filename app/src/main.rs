@@ -2,15 +2,25 @@ mod args;
 
 use args::Args;
 use clap::Parser;
-use log::{info};
+use log::{error, info};
 
-fn main() {
+#[tokio::main]
+async fn main() {
   env_logger::init();
 
-  info!("run begins");
-  let args = Args::parse();
+  info!("Starting up...");
 
-  for _ in 0..args.count {
-    println!("Hello, {}!", args.name);
+  let args = Args::parse();
+  let source = args.source.as_str();
+
+  match source {
+    "postgres" => {
+      info!("Starting Postgres source...");
+    }
+    _ => {
+      error!("Unknown source: {}", source);
+    }
   }
+
+  info!("Terminating...")
 }
