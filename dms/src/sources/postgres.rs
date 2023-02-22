@@ -111,7 +111,6 @@ impl Source for PostgresSource {
       match event[0] {
         b'w' => {
           let e = Self::parse_event(event)?;
-          println!("Got event: {:?}", e["change"]);
         }
         b'k' => {
           Self::keep_alive(event, &mut duplex_stream_pin).await?;
@@ -130,7 +129,7 @@ impl PostgresSource {
   fn parse_event(event: Bytes) -> Result<Value> {
     let b = &event[25..];
     let s = std::str::from_utf8(b)?;
-    println!("Got XLogData/wal2json event: {}", s);
+    println!("{}", s);
     let v: Value = serde_json::from_str(s)?;
     Ok(v)
   }

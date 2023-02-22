@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
   match source {
     "postgres" => {
       let mut source = PostgresSource::new(Config {
-        endpoint: "host=localhost user=postgres password=postgres dbname=postgres".to_string(),
+        endpoint: "host=localhost user=postgres password=postgres dbname=postgres replication=database".to_string(),
       });
       source.connect().await?;
       source.stream().await?;
