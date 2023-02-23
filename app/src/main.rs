@@ -1,4 +1,6 @@
 mod args;
+mod config;
+mod yaml;
 
 use anyhow::Result;
 use args::Args;
@@ -16,31 +18,33 @@ async fn main() -> Result<()> {
     info!("Starting up...");
 
     let args = Args::parse();
-    let source = args.source.as_str();
+    let config = yaml::load_config(&args.config_path)?;
 
-    match source {
-        "postgres" => {
-            let mut source = PostgresSource::new(Config {
-        endpoint: "host=localhost user=postgres password=postgres dbname=postgres replication=database".to_string(),
-      });
-            source.connect().await?;
+    println!("{:?}", config);
 
-            let mut event_stream = DataStream::new();
-
-            let tx_future = source.stream(&mut event_stream.tx);
-            let rx_future = async {
-                loop {
-                    let event = event_stream.rx.recv().await;
-                    println!("Here you go - {:?}", event);
-                }
-            };
-
-            let (_, _) = tokio::join!(tx_future, rx_future);
-        }
-        _ => {
-            error!("Unknown source: {}", source);
-        }
-    }
+    // match source {
+    //     "postgres" => {
+    //         let mut source = PostgresSource::new(Config {
+    //     endpoint: "host=localhost user=postgres password=postgres dbname=postgres replication=database".to_string(),
+    //   });
+    //         source.connect().await?;
+    //
+    //         let mut event_stream = DataStream::new();
+    //
+    //         let tx_future = source.stream(&mut event_stream.tx);
+    //         let rx_future = async {
+    //             loop {
+    //                 let event = event_stream.rx.recv().await;
+    //                 println!("Here you go - {:?}", event);
+    //             }
+    //         };
+    //
+    //         let (_, _) = tokio::join!(tx_future, rx_future);
+    //     }
+    //     _ => {
+    //         error!("Unknown source: {}", source);
+    //     }
+    // }
 
     info!("Terminating...");
     Ok(())
