@@ -29,24 +29,15 @@ async fn main() -> Result<()> {
 
       let mut event_stream = DataStream::new();
 
-      let send_thread = thread::spawn(move || {
-        block_on(source.stream(&mut event_stream.tx))
-      });
-
-      let receive_thread = thread::spawn(move || {
+      let tx_future = source.stream(&mut event_stream.tx);
+      let rx_future = async {
         loop {
-          let event = block_on(event_stream.rx.recv());
+          let event = event_stream.rx.recv().await;
           println!("Here you go - {:?}", event);
         }
-      });
+      };
 
-      let _ = send_thread.join();
-      let _ = receive_thread.join();
-
-      // Block on the event stream
-      // while let Some(event) = event_stream.rx.next().await {
-      //   println!("{:?}", event);
-      // }
+      let (_, _) = tokio::join!(tx_future, rx_future);
     }
     _ => {
       error!("Unknown source: {}", source);
