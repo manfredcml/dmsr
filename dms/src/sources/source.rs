@@ -5,10 +5,9 @@ use tokio::sync::mpsc::Sender;
 
 #[async_trait]
 pub trait Source {
-    fn new(config: SourceConfig) -> Self
+    fn new(config: &SourceConfig) -> anyhow::Result<Box<Self>>
     where
         Self: Sized;
-    fn get_config(&self) -> &SourceConfig;
     async fn connect(&mut self) -> anyhow::Result<()>;
     async fn stream(&mut self, tx: &mut Sender<Event>) -> anyhow::Result<()>;
 }

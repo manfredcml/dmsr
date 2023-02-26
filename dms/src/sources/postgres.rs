@@ -2,8 +2,9 @@ use crate::events::event_type::EventType;
 use crate::events::postgres_event::PostgresEvent;
 use crate::events::standardized_event::Event;
 use crate::sources::config::SourceConfig;
+use crate::sources::postgres_config::PostgresConfig;
 use crate::sources::source::Source;
-use crate::sources::source_type::SourceType;
+use crate::sources::source_kind::SourceKind;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -15,21 +16,26 @@ use tokio::sync::mpsc::Sender;
 use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
 
 pub struct PostgresSource {
-    config: SourceConfig,
+    config: PostgresConfig,
     client: Option<Client>,
 }
 
 #[async_trait]
 impl Source for PostgresSource {
-    fn new(config: SourceConfig) -> Self {
-        PostgresSource {
+    fn new(config: &SourceConfig) -> anyhow::Result<Box<Self>> {
+        if config.kind != SourceKind::Postgres {
+            return Err(anyhow!("Invalid source type for PostgresSource"));
+        }
+
+        let config = match &config.postgres_config {
+            Some(config) => config.clone(),
+            None => return Err(anyhow!("Invalid config for PostgresSource")),
+        };
+
+        Ok(Box::new(PostgresSource {
             config,
             client: None,
-        }
-    }
-
-    fn get_config(&self) -> &SourceConfig {
-        &self.config
+        }))
     }
 
     async fn connect(&mut self) -> anyhow::Result<()> {
@@ -124,7 +130,7 @@ impl PostgresSource {
         println!("{:?}", raw_event);
 
         let event = Event {
-            source_type: SourceType::Postgres,
+            source_type: SourceKind::Postgres,
             event_type: EventType::Insert,
             schema: "schema".to_string(),
             table: "table".to_string(),

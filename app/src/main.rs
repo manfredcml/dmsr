@@ -5,7 +5,7 @@ mod yaml;
 use args::Args;
 use clap::Parser;
 use dms::events::event_stream::DataStream;
-use log::{error, info};
+use log::info;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -31,14 +31,8 @@ async fn main() -> anyhow::Result<()> {
     let mut sources: Vec<Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>> = Vec::new();
 
     for sc in config.sources {
-        let source_type = sc.source_type.clone();
-        let mut source = match sc.get_source() {
-            Some(s) => s,
-            None => {
-                error!("Unknown source type: {:?}", source_type);
-                continue;
-            }
-        };
+        let source_type = sc.kind.clone();
+        let mut source = sc.get_source()?;
 
         let source_future = async move {
             source.connect().await?;

@@ -1,10 +1,11 @@
 sources:
   - name: "local-postgres"
-    source_type: postgres
-    host: "localhost"
-    port: 5432
-    user: postgres
-    password: postgres
+    kind: postgres
+    postgres_config:
+      host: "localhost"
+      port: 5432
+      user: postgres
+      password: postgres
 
 queue:
   kind: kafka
