@@ -15,7 +15,7 @@ pub struct SourceConfig {
 }
 
 impl SourceConfig {
-    pub fn get_source(self) -> Option<Box<dyn Source>> {
+    pub fn get_source(self) -> Option<Box<dyn Source + Send>> {
         match self.source_type {
             SourceType::Postgres => Some(Box::new(PostgresSource::new(self))),
             _ => None,
