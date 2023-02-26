@@ -8,6 +8,8 @@ use dms::events::event_stream::DataStream;
 use log::info;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use futures::lock::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,36 +23,22 @@ async fn main() -> anyhow::Result<()> {
     info!("Config: {:?}", config);
 
     // Start streamer
-    let mut streamer = config.queue.get_streamer()?;
-    streamer.connect().await?;
-    streamer.ingest(vec![]).await?;
-
+    let mut queue = config.queue.get_streamer()?;
+    queue.connect().await?;
     info!("connected!!");
+
+    let queue = Arc::new(Mutex::new(queue));
 
     // Start sources
     let mut sources: Vec<Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>> = Vec::new();
 
     for sc in config.sources {
-        let source_type = sc.kind.clone();
         let mut source = sc.get_source()?;
 
+        let q = Arc::clone(&queue);
         let source_future = async move {
             source.connect().await?;
-            let mut event_stream = DataStream::new();
-            let tx_future = source.stream(&mut event_stream.tx);
-            let rx_future = async {
-                loop {
-                    let event = match event_stream.rx.recv().await {
-                        Some(e) => e,
-                        None => continue,
-                    };
-
-                    // Send event into Kafka
-
-                    println!("Events : {:?}", event);
-                }
-            };
-            let _ = tokio::join!(tx_future, rx_future);
+            source.stream(q).await?;
             Ok(())
         };
 

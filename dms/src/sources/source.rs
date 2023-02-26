@@ -1,7 +1,8 @@
-use crate::events::standardized_event::Event;
+use crate::queue::queue::Queue;
 use crate::sources::config::SourceConfig;
 use async_trait::async_trait;
-use tokio::sync::mpsc::Sender;
+use futures::lock::Mutex;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait Source {
@@ -9,5 +10,5 @@ pub trait Source {
     where
         Self: Sized;
     async fn connect(&mut self) -> anyhow::Result<()>;
-    async fn stream(&mut self, tx: &mut Sender<Event>) -> anyhow::Result<()>;
+    async fn stream(&mut self, queue: Arc<Mutex<Box<dyn Queue + Send>>>) -> anyhow::Result<()>;
 }

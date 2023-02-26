@@ -1,6 +1,7 @@
 use crate::events::event_type::EventType;
 use crate::events::postgres_event::PostgresEvent;
 use crate::events::standardized_event::Event;
+use crate::queue::queue::Queue;
 use crate::sources::config::SourceConfig;
 use crate::sources::postgres_config::PostgresConfig;
 use crate::sources::source::Source;
@@ -8,11 +9,12 @@ use crate::sources::source_kind::SourceKind;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::lock::Mutex;
 use futures::{future, ready, Sink, StreamExt};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc::Sender;
 use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
 
 pub struct PostgresSource {
@@ -56,7 +58,7 @@ impl Source for PostgresSource {
         Ok(())
     }
 
-    async fn stream(&mut self, tx: &mut Sender<Event>) -> anyhow::Result<()> {
+    async fn stream(&mut self, queue: Arc<Mutex<Box<dyn Queue + Send>>>) -> anyhow::Result<()> {
         let client = match self.client.as_mut() {
             Some(client) => client,
             None => return Err(anyhow!("Failed to connect to Postgres")),
@@ -105,7 +107,8 @@ impl Source for PostgresSource {
             match event[0] {
                 b'w' => {
                     let e = Self::parse_event(event)?;
-                    tx.send(e).await?;
+                    let mut q = queue.lock().await;
+                    q.ingest(e).await?;
                 }
                 b'k' => {
                     Self::keep_alive(event, &mut duplex_stream_pin).await?;

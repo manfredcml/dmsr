@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
 use std::time::Duration;
+use crate::events::standardized_event::Event;
 
 pub struct Kafka {
     config: KafkaConfig,
@@ -38,7 +39,7 @@ impl Queue for Kafka {
         Ok(())
     }
 
-    async fn ingest(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
+    async fn ingest(&mut self, event: Event) -> anyhow::Result<()> {
         let producer = match &self.producer {
             Some(producer) => producer,
             None => return Err(anyhow::anyhow!("Producer not initialized")),
