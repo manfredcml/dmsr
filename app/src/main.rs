@@ -7,6 +7,7 @@ use clap::Parser;
 use dms::events::event_stream::DataStream;
 use log::{error, info};
 use std::future::Future;
+use std::pin::Pin;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,9 +18,8 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config = yaml::load_config(&args.config_path)?;
 
-    info!("Config: {:?}", config);
+    let mut sources: Vec<Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>> = Vec::new();
 
-    let mut sources: Vec<_> = vec![];
     for sc in config.sources {
         let source_type = sc.source_type.clone();
         let mut source = match sc.get_source() {
@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let source_future = async move {
-            source.connect().await.unwrap();
+            source.connect().await?;
             let mut event_stream = DataStream::new();
             let tx_future = source.stream(&mut event_stream.tx);
             let rx_future = async {
@@ -40,13 +40,14 @@ async fn main() -> anyhow::Result<()> {
                     println!("Here you go - {:?}", event);
                 }
             };
-
             let _ = tokio::join!(tx_future, rx_future);
+            Ok(())
         };
-        sources.push(source_future);
+
+        sources.push(Box::pin(source_future));
     }
 
-    futures::future::join_all(sources).await;
+    futures::future::try_join_all(sources.into_iter().map(tokio::spawn)).await?;
 
     info!("Terminating...");
     Ok(())

@@ -4,7 +4,7 @@ use crate::events::standardized_event::Event;
 use crate::sources::config::SourceConfig;
 use crate::sources::source::Source;
 use crate::sources::source_type::SourceType;
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{future, ready, Sink, StreamExt};
@@ -32,7 +32,7 @@ impl Source for PostgresSource {
         &self.config
     }
 
-    async fn connect(&mut self) -> Result<()> {
+    async fn connect(&mut self) -> anyhow::Result<()> {
         let endpoint = format!(
             "host={} port={} user={} password={} replication=database",
             self.config.host, self.config.port, self.config.user, self.config.password
@@ -50,7 +50,7 @@ impl Source for PostgresSource {
         Ok(())
     }
 
-    async fn stream(&mut self, tx: &mut Sender<Event>) -> Result<()> {
+    async fn stream(&mut self, tx: &mut Sender<Event>) -> anyhow::Result<()> {
         let client = match self.client.as_mut() {
             Some(client) => client,
             None => return Err(anyhow!("Failed to connect to Postgres")),
@@ -115,7 +115,7 @@ impl Source for PostgresSource {
 }
 
 impl PostgresSource {
-    fn parse_event(event: Bytes) -> Result<Event> {
+    fn parse_event(event: Bytes) -> anyhow::Result<Event> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
         println!("{}", s);
@@ -136,7 +136,7 @@ impl PostgresSource {
     async fn keep_alive(
         event: Bytes,
         duplex_stream_pin: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let last_byte = match event.last() {
             Some(last_byte) => last_byte,
             None => return Ok(()),
