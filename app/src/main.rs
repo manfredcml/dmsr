@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Config: {:?}", config);
 
     // Start streamer
-    let mut streamer = config.streamer.get_streamer()?;
+    let mut streamer = config.queue.get_streamer()?;
     streamer.connect().await?;
     streamer.ingest(vec![]).await?;
 

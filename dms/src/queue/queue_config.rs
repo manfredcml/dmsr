@@ -1,21 +1,21 @@
-use crate::streamers::kafka::Kafka;
-use crate::streamers::kafka_config::KafkaConfig;
-use crate::streamers::streamer::Streamer;
-use crate::streamers::streamer_type::StreamerKind;
+use crate::queue::kafka::Kafka;
+use crate::queue::kafka_config::KafkaConfig;
+use crate::queue::queue::Queue;
+use crate::queue::queue_kind::QueueKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct StreamerConfig {
+pub struct QueueConfig {
     #[serde(deserialize_with = "deserialize_streamer_type")]
-    pub kind: StreamerKind,
+    pub kind: QueueKind,
     pub name: String,
     pub kafka_config: Option<KafkaConfig>,
 }
 
-impl StreamerConfig {
-    pub fn get_streamer(&self) -> anyhow::Result<Box<dyn Streamer + Send>> {
+impl QueueConfig {
+    pub fn get_streamer(&self) -> anyhow::Result<Box<dyn Queue + Send>> {
         match self.kind {
-            StreamerKind::Kafka => {
+            QueueKind::Kafka => {
                 let kafka = Kafka::new(&self)?;
                 Ok(kafka)
             }
@@ -23,13 +23,13 @@ impl StreamerConfig {
     }
 }
 
-fn deserialize_streamer_type<'de, D>(deserializer: D) -> Result<StreamerKind, D::Error>
+fn deserialize_streamer_type<'de, D>(deserializer: D) -> Result<QueueKind, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
     match s.to_lowercase().as_str() {
-        "kafka" => Ok(StreamerKind::Kafka),
+        "kafka" => Ok(QueueKind::Kafka),
         _ => Err(serde::de::Error::custom(format!(
             "Unknown source type: {}",
             s

@@ -6,8 +6,8 @@ sources:
     user: postgres
     password: postgres
 
-streamer:
+queue:
   kind: kafka
-  name: test-streamer
+  name: test-queue
   kafka_config:
     bootstrap_servers: localhost:9092

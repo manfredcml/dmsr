@@ -1,11 +1,10 @@
-use crate::streamers::kafka_config::KafkaConfig;
-use crate::streamers::streamer::Streamer;
-use crate::streamers::streamer_config::StreamerConfig;
-use crate::streamers::streamer_type::StreamerKind;
+use crate::queue::kafka_config::KafkaConfig;
+use crate::queue::queue::Queue;
+use crate::queue::queue_config::QueueConfig;
+use crate::queue::queue_kind::QueueKind;
 use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
-use rdkafka::util::Timeout;
 use std::time::Duration;
 
 pub struct Kafka {
@@ -14,9 +13,9 @@ pub struct Kafka {
 }
 
 #[async_trait]
-impl Streamer for Kafka {
-    fn new(config: &StreamerConfig) -> anyhow::Result<Box<Self>> {
-        if config.kind != StreamerKind::Kafka {
+impl Queue for Kafka {
+    fn new(config: &QueueConfig) -> anyhow::Result<Box<Self>> {
+        if config.kind != QueueKind::Kafka {
             return Err(anyhow::anyhow!("Invalid streamer type"));
         }
 
@@ -63,6 +62,6 @@ impl Streamer for Kafka {
                 println!("Send failed: {:?}: {:?}", err, message);
                 Err(anyhow::anyhow!("Send failed: {:?}: {:?}", err, message))
             }
-        }
+        };
     }
 }
