@@ -5,3 +5,9 @@ sources:
     port: 5432
     user: postgres
     password: postgres
+
+streamer:
+  kind: kafka
+  name: test-streamer
+  kafka_config:
+    bootstrap_servers: localhost:9092

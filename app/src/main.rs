@@ -18,6 +18,16 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config = yaml::load_config(&args.config_path)?;
 
+    info!("Config: {:?}", config);
+
+    // Start streamer
+    let mut streamer = config.streamer.get_streamer()?;
+    streamer.connect().await?;
+    streamer.ingest(vec![]).await?;
+
+    info!("connected!!");
+
+    // Start sources
     let mut sources: Vec<Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>> = Vec::new();
 
     for sc in config.sources {
@@ -36,8 +46,14 @@ async fn main() -> anyhow::Result<()> {
             let tx_future = source.stream(&mut event_stream.tx);
             let rx_future = async {
                 loop {
-                    let event = event_stream.rx.recv().await;
-                    println!("Here you go - {:?}", event);
+                    let event = match event_stream.rx.recv().await {
+                        Some(e) => e,
+                        None => continue,
+                    };
+
+                    // Send event into Kafka
+
+                    println!("Events : {:?}", event);
                 }
             };
             let _ = tokio::join!(tx_future, rx_future);
