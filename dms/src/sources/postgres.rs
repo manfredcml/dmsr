@@ -1,6 +1,7 @@
 use crate::events::event::ChangeEvent;
 use crate::events::event_kind::EventKind;
 use crate::events::postgres_event::PostgresEvent;
+use crate::events::raw_postgres_event::RawPostgresEvent;
 use crate::queue::queue::Queue;
 use crate::sources::config::SourceConfig;
 use crate::sources::postgres_config::PostgresConfig;
@@ -145,18 +146,24 @@ impl PostgresSource {
         let s = std::str::from_utf8(b)?;
         println!("{}", s);
 
-        let raw_event: PostgresEvent = serde_json::from_str(s)?;
+        let raw_event: RawPostgresEvent = serde_json::from_str(s)?;
         println!("{:?}", raw_event);
 
-        let event = ChangeEvent {
-            source_kind: SourceKind::Postgres,
-            source_name: self.get_name().to_string(),
-            event_kind: EventKind::Insert,
-            schema: "schema".to_string(),
-            table: "table".to_string(),
+        let postgres_event = PostgresEvent {
+            schema: "test_schema".to_string(),
+            table: "test_table".to_string(),
         };
 
-        Ok(event)
+        let change_event = ChangeEvent {
+            source_name: self.get_name().to_string(),
+            source_kind: SourceKind::Postgres,
+            event_kind: EventKind::Insert,
+            postgres_event: Some(postgres_event),
+        };
+
+        println!("{:?}", change_event);
+
+        Ok(change_event)
     }
 
     async fn keep_alive(

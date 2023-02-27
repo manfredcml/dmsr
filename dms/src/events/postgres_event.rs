@@ -1,19 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PostgresEvent {
-    change: Vec<Change>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Change {
-    kind: String,
-    schema: String,
-    table: String,
-    #[serde(rename = "columnnames")]
-    column_names: Vec<String>,
-    #[serde(rename = "columntypes")]
-    column_types: Vec<String>,
-    #[serde(rename = "columnvalues")]
-    column_values: Vec<serde_json::Value>,
+    pub schema: String,
+    pub table: String,
 }
