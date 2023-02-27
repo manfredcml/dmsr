@@ -17,7 +17,7 @@ targets:
       password: postgres
 
 connectors:
-  - name: "postgres <> postgres"
+  - name: postgres-postgres
     source: source-postgres
     target: target-postgres
 

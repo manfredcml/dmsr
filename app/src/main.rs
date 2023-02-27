@@ -4,11 +4,11 @@ mod yaml;
 
 use args::Args;
 use clap::Parser;
+use futures::lock::Mutex;
 use log::info;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use futures::lock::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -18,10 +18,10 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     let config = yaml::load_config(&args.config_path)?;
+    config.validate()?;
 
     info!("Config: {:?}", config);
 
-    // Start streamer
     let mut queue = config.queue.get_streamer()?;
     queue.connect().await?;
     info!("connected!!");
