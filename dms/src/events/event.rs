@@ -1,5 +1,5 @@
 use crate::events::kind::EventKind;
-use crate::sources::source_kind::SourceKind;
+use crate::sources_targets::source_kind::SourceKind;
 use serde::{Deserialize, Serialize};
 use crate::events::postgres_event::PostgresEvent;
 

@@ -1,7 +1,7 @@
-use crate::sources::postgres::PostgresSource;
-use crate::sources::postgres_config::PostgresConfig;
-use crate::sources::source::Source;
-use crate::sources::source_kind::SourceKind;
+use crate::sources_targets::postgres::Postgres;
+use crate::sources_targets::postgres_config::PostgresConfig;
+use crate::sources_targets::source::Source;
+use crate::sources_targets::source_kind::SourceKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -16,7 +16,7 @@ impl SourceConfig {
     pub fn get_source(self) -> anyhow::Result<Box<dyn Source + Send>> {
         match self.kind {
             SourceKind::Postgres => {
-                let postgres = PostgresSource::new(&self)?;
+                let postgres = Postgres::new(&self)?;
                 Ok(postgres)
             }
         }

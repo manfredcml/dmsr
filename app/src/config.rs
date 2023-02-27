@@ -1,4 +1,4 @@
-use dms::sources::config::SourceConfig;
+use dms::sources_targets::source_config::SourceConfig;
 use dms::queue::config::QueueConfig;
 use serde::{Deserialize, Serialize};
 

@@ -1,5 +1,5 @@
-use crate::targets::kind::TargetKind;
-use crate::targets::postgres_config::PostgresConfig;
+use crate::sources_targets::postgres_config::PostgresConfig;
+use crate::sources_targets::target_kind::TargetKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
