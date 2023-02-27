@@ -1,7 +1,7 @@
 use crate::events::event::ChangeEvent;
 use crate::events::event_kind::EventKind;
 use crate::events::postgres_event::PostgresEvent;
-use crate::events::raw_postgres_event::RawPostgresEvent;
+use crate::events::raw_postgres_event::{Change, RawPostgresEvent};
 use crate::queue::queue::Queue;
 use crate::sources::config::SourceConfig;
 use crate::sources::postgres_config::PostgresConfig;
@@ -116,9 +116,12 @@ impl Source for PostgresSource {
 
             match event[0] {
                 b'w' => {
-                    let e = Self::parse_event(&self, event)?;
+                    let change_events = Self::parse_event(&self, event)?;
                     let mut q = queue.lock().await;
-                    q.ingest(e).await?;
+                    for e in change_events {
+                        println!("Ingesting: {:?}", e);
+                        q.ingest(e).await?;
+                    }
                 }
                 b'k' => {
                     Self::keep_alive(event, &mut duplex_stream_pin).await?;
@@ -141,29 +144,31 @@ impl PostgresSource {
         }
     }
 
-    fn parse_event(&self, event: Bytes) -> anyhow::Result<ChangeEvent> {
+    fn parse_event(&self, event: Bytes) -> anyhow::Result<Vec<ChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
         println!("{}", s);
 
         let raw_event: RawPostgresEvent = serde_json::from_str(s)?;
-        println!("{:?}", raw_event);
 
-        let postgres_event = PostgresEvent {
-            schema: "test_schema".to_string(),
-            table: "test_table".to_string(),
-        };
+        let change_events: Vec<_> = raw_event
+            .change
+            .into_iter()
+            .map(|c| {
+                let postgres_event = PostgresEvent {
+                    schema: c.schema,
+                    table: c.table,
+                };
+                ChangeEvent {
+                    source_name: self.get_name().to_string(),
+                    source_kind: SourceKind::Postgres,
+                    event_kind: EventKind::Insert,
+                    postgres_event: Some(postgres_event),
+                }
+            })
+            .collect();
 
-        let change_event = ChangeEvent {
-            source_name: self.get_name().to_string(),
-            source_kind: SourceKind::Postgres,
-            event_kind: EventKind::Insert,
-            postgres_event: Some(postgres_event),
-        };
-
-        println!("{:?}", change_event);
-
-        Ok(change_event)
+        Ok(change_events)
     }
 
     async fn keep_alive(

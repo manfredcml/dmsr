@@ -1,3 +1,4 @@
+use crate::events::event::ChangeEvent;
 use crate::queue::kafka_config::KafkaConfig;
 use crate::queue::queue::Queue;
 use crate::queue::queue_config::QueueConfig;
@@ -6,7 +7,6 @@ use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
 use std::time::Duration;
-use crate::events::event::ChangeEvent;
 
 pub struct Kafka {
     config: KafkaConfig,
@@ -45,12 +45,14 @@ impl Queue for Kafka {
             None => return Err(anyhow::anyhow!("Producer not initialized")),
         };
 
-        let message = "Hello, Kafka!";
         let key = "my_key";
         let topic = "test_topic";
+        let message = serde_json::to_string(&event)?;
+
+        println!("Message: {}", message);
 
         let record = rdkafka::producer::FutureRecord::to(topic)
-            .payload(message)
+            .payload(message.as_str())
             .key(key);
 
         let status = producer.send(record, Duration::from_secs(0)).await;
