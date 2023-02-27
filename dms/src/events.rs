@@ -1,4 +1,3 @@
-pub mod event_stream;
-pub mod standardized_event;
-pub mod event_type;
+pub mod event;
+pub mod event_kind;
 pub mod postgres_event;

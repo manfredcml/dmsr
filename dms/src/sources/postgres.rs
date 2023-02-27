@@ -1,6 +1,6 @@
-use crate::events::event_type::EventType;
+use crate::events::event::ChangeEvent;
+use crate::events::event_kind::EventKind;
 use crate::events::postgres_event::PostgresEvent;
-use crate::events::standardized_event::Event;
 use crate::queue::queue::Queue;
 use crate::sources::config::SourceConfig;
 use crate::sources::postgres_config::PostgresConfig;
@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
 
 pub struct PostgresSource {
-    config: PostgresConfig,
+    config: SourceConfig,
     client: Option<Client>,
 }
 
@@ -29,21 +29,30 @@ impl Source for PostgresSource {
             return Err(anyhow!("Invalid source type for PostgresSource"));
         }
 
-        let config = match &config.postgres_config {
-            Some(config) => config.clone(),
-            None => return Err(anyhow!("Invalid config for PostgresSource")),
-        };
+        if config.postgres_config == None {
+            return Err(anyhow!("Invalid config for PostgresSource"));
+        }
 
         Ok(Box::new(PostgresSource {
-            config,
+            config: config.clone(),
             client: None,
         }))
     }
 
+    fn get_name(&self) -> &String {
+        &self.config.name
+    }
+
+    fn get_config(&self) -> &SourceConfig {
+        &self.config
+    }
+
     async fn connect(&mut self) -> anyhow::Result<()> {
+        let config = self.get_postgres_config()?;
+
         let endpoint = format!(
             "host={} port={} user={} password={} replication=database",
-            self.config.host, self.config.port, self.config.user, self.config.password
+            config.host, config.port, config.user, config.password
         );
 
         let (client, connection) = tokio_postgres::connect(endpoint.as_str(), NoTls).await?;
@@ -106,7 +115,7 @@ impl Source for PostgresSource {
 
             match event[0] {
                 b'w' => {
-                    let e = Self::parse_event(event)?;
+                    let e = Self::parse_event(&self, event)?;
                     let mut q = queue.lock().await;
                     q.ingest(e).await?;
                 }
@@ -124,7 +133,14 @@ impl Source for PostgresSource {
 }
 
 impl PostgresSource {
-    fn parse_event(event: Bytes) -> anyhow::Result<Event> {
+    fn get_postgres_config(&self) -> anyhow::Result<&PostgresConfig> {
+        match &self.config.postgres_config {
+            Some(config) => Ok(config),
+            None => Err(anyhow!("Invalid config for PostgresSource")),
+        }
+    }
+
+    fn parse_event(&self, event: Bytes) -> anyhow::Result<ChangeEvent> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
         println!("{}", s);
@@ -132,9 +148,10 @@ impl PostgresSource {
         let raw_event: PostgresEvent = serde_json::from_str(s)?;
         println!("{:?}", raw_event);
 
-        let event = Event {
-            source_type: SourceKind::Postgres,
-            event_type: EventType::Insert,
+        let event = ChangeEvent {
+            source_kind: SourceKind::Postgres,
+            source_name: self.get_name().to_string(),
+            event_kind: EventKind::Insert,
             schema: "schema".to_string(),
             table: "table".to_string(),
         };

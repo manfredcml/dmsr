@@ -4,7 +4,6 @@ mod yaml;
 
 use args::Args;
 use clap::Parser;
-use dms::events::event_stream::DataStream;
 use log::info;
 use std::future::Future;
 use std::pin::Pin;

@@ -9,6 +9,8 @@ pub trait Source {
     fn new(config: &SourceConfig) -> anyhow::Result<Box<Self>>
     where
         Self: Sized;
+    fn get_name(&self) -> &String;
+    fn get_config(&self) -> &SourceConfig;
     async fn connect(&mut self) -> anyhow::Result<()>;
     async fn stream(&mut self, queue: Arc<Mutex<Box<dyn Queue + Send>>>) -> anyhow::Result<()>;
 }

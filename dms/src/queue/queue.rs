@@ -1,6 +1,6 @@
 use crate::queue::queue_config::QueueConfig;
 use async_trait::async_trait;
-use crate::events::standardized_event::Event;
+use crate::events::event::ChangeEvent;
 
 #[async_trait]
 pub trait Queue {
@@ -8,5 +8,5 @@ pub trait Queue {
     where
         Self: Sized;
     async fn connect(&mut self) -> anyhow::Result<()>;
-    async fn ingest(&mut self, event: Event) -> anyhow::Result<()>;
+    async fn ingest(&mut self, event: ChangeEvent) -> anyhow::Result<()>;
 }

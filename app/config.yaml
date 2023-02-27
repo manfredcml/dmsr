@@ -1,14 +1,14 @@
 sources:
   - name: "local-postgres"
     kind: postgres
-    postgres_config:
+    postgres:
       host: "localhost"
       port: 5432
       user: postgres
       password: postgres
 
 queue:
-  kind: kafka
   name: test-queue
-  kafka_config:
+  kind: kafka
+  kafka:
     bootstrap_servers: localhost:9092

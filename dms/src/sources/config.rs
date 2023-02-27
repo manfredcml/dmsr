@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct SourceConfig {
-    #[serde(deserialize_with = "deserialize_source_type")]
     pub kind: SourceKind,
     pub name: String,
+    #[serde(rename = "postgres")]
     pub postgres_config: Option<PostgresConfig>,
 }
 
@@ -18,21 +18,7 @@ impl SourceConfig {
             SourceKind::Postgres => {
                 let postgres = PostgresSource::new(&self)?;
                 Ok(postgres)
-            },
+            }
         }
-    }
-}
-
-fn deserialize_source_type<'de, D>(deserializer: D) -> Result<SourceKind, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    match s.as_str() {
-        "postgres" => Ok(SourceKind::Postgres),
-        _ => Err(serde::de::Error::custom(format!(
-            "Unknown source type: {}",
-            s
-        ))),
     }
 }
