@@ -154,17 +154,26 @@ impl PostgresSource {
         let change_events: Vec<_> = raw_event
             .change
             .into_iter()
-            .map(|c| {
+            .filter_map(|c| {
                 let postgres_event = PostgresEvent {
                     schema: c.schema,
                     table: c.table,
+                    column_names: c.column_names,
+                    column_types: c.column_types,
+                    column_values: c.column_values,
                 };
-                ChangeEvent {
+
+                let event_kind = match c.kind.as_str().parse() {
+                    Ok(event_kind) => event_kind,
+                    Err(_) => return None,
+                };
+
+                Some(ChangeEvent {
                     source_name: self.get_name().to_string(),
                     source_kind: SourceKind::Postgres,
-                    event_kind: EventKind::Insert,
+                    event_kind,
                     postgres_event: Some(postgres_event),
-                }
+                })
             })
             .collect();
 
