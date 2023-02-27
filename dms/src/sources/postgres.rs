@@ -1,7 +1,6 @@
 use crate::events::event::ChangeEvent;
-use crate::events::event_kind::EventKind;
 use crate::events::postgres_event::PostgresEvent;
-use crate::events::raw_postgres_event::{Change, RawPostgresEvent};
+use crate::events::raw_postgres_event::RawPostgresEvent;
 use crate::queue::queue::Queue;
 use crate::sources::config::SourceConfig;
 use crate::sources::postgres_config::PostgresConfig;

@@ -1,8 +1,8 @@
 use crate::events::event::ChangeEvent;
 use crate::queue::kafka_config::KafkaConfig;
 use crate::queue::queue::Queue;
-use crate::queue::queue_config::QueueConfig;
-use crate::queue::queue_kind::QueueKind;
+use crate::queue::config::QueueConfig;
+use crate::queue::kind::QueueKind;
 use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;

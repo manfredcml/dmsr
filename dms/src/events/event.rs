@@ -1,4 +1,4 @@
-use crate::events::event_kind::EventKind;
+use crate::events::kind::EventKind;
 use crate::sources::source_kind::SourceKind;
 use serde::{Deserialize, Serialize};
 use crate::events::postgres_event::PostgresEvent;

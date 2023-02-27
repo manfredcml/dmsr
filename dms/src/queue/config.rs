@@ -1,7 +1,7 @@
 use crate::queue::kafka::Kafka;
 use crate::queue::kafka_config::KafkaConfig;
 use crate::queue::queue::Queue;
-use crate::queue::queue_kind::QueueKind;
+use crate::queue::kind::QueueKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

@@ -1,11 +1,25 @@
 sources:
-  - name: "local-postgres"
+  - name: "source-postgres"
     kind: postgres
     postgres:
       host: "localhost"
       port: 5432
       user: postgres
       password: postgres
+
+targets:
+  - name: "target-postgres"
+    kind: postgres
+    postgres:
+      host: "localhost"
+      port: 5432
+      user: postgres
+      password: postgres
+
+connectors:
+  - name: "postgres <> postgres"
+    source: source-postgres
+    target: target-postgres
 
 queue:
   name: test-queue

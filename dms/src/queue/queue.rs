@@ -1,4 +1,4 @@
-use crate::queue::queue_config::QueueConfig;
+use crate::queue::config::QueueConfig;
 use async_trait::async_trait;
 use crate::events::event::ChangeEvent;
 
