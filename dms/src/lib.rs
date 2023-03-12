@@ -1,6 +1,7 @@
 extern crate core;
 
-pub mod events;
+pub mod database;
+pub mod event;
 pub mod queue;
-pub mod sources_targets;
-pub mod connectors;
+pub mod sink_connector;
+pub mod source_connector;

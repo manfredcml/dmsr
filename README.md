@@ -1,30 +1,18 @@
-Design Document: DMSR (Data Migration System in Rust)
+Design Document: DMSR (Data Migration Service in Rust)
 ====================================
 
 ## Introduction
 
-DMSR, or Data Migration System in Rust, is a tool designed to enable users to replicate data between different data
-storage systems. The idea is inspired by AWS DMS, which serves the same purpose yet under a paid
-proprietary service provided AWS. DMSR allows users to specify a source and a target for data replication, where the
-source is primarily a database and the target can be databases, object storage systems or message queues. The framework
-supports both one-off and continuous data replication, allowing users to replicate data on-demand or in real-time.
-
-The design principles of the data framework are:
-
-- Container-native: Designed to be deployed in containers, orchestrated by tools such as Kubernetes.
-- Cloud-agnostic: Not specific to any cloud provider.
-- Open-source: Free to use and modify.
-- Extensible: Support for new data sources and targets can be added easily.
-- Flexible: Users can specify the replication mode and the replication frequency.
-- Reliable: Data replication is reliable and fault-tolerant.
-- Efficient: Data replication is efficient and scalable.
-- Secure: Data replication is secure and encrypted.
-- Simple: Easy to use and configure.
+DMSR, also known as Data Migration Service in Rust, is an open-source tool that allows users to replicate data between
+different storage systems. Inspired by AWS DMS, which offers a similar service under a paid, proprietary model, DMSR
+enables users to specify a source (typically a database) and a target (databases, object storage systems, or message
+queues) for replication. The framework supports both one-off and continuous replication, allowing users to replicate
+data in real-time or on-demand.
 
 ## Architecture
 
-DMSR is designed as a modular system composed of several key components that work together to replicate
-data between different storage systems. The main components of the framework are:
+The architecture of DMSR is modular and consists of key components that work together to replicate data between storage
+systems. These components include:
 
 ### Data Sources and Targets
 

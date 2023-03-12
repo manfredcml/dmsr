@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
-pub struct PostgresConfig {
+pub struct PostgresSourceConfig {
     pub host: String,
     pub port: u16,
     pub user: String,

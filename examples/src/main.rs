@@ -1,6 +1,6 @@
-use dms::sources_targets::source::Source;
-use dms::sources_targets::source_config::Config;
-use dms::sources_targets::postgres::Postgres;
+use dms::database::source::Source;
+use dms::database::source_config::Config;
+use dms::database::postgres::Postgres;
 use anyhow::Result;
 
 #[tokio::main]

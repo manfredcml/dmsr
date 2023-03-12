@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
     let queue = Arc::new(Mutex::new(queue));
 
-    // Start sources_targets
+    // Start database
     let mut sources: Vec<Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>> = Vec::new();
 
     for sc in config.sources {

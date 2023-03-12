@@ -1,8 +1,6 @@
-use crate::events::event::ChangeEvent;
+use crate::event::event::ChangeEvent;
 use crate::queue::kafka_config::KafkaConfig;
 use crate::queue::queue::Queue;
-use crate::queue::config::QueueConfig;
-use crate::queue::kind::QueueKind;
 use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
@@ -15,18 +13,11 @@ pub struct Kafka {
 
 #[async_trait]
 impl Queue for Kafka {
-    fn new(config: &QueueConfig) -> anyhow::Result<Box<Self>> {
-        if config.kind != QueueKind::Kafka {
-            return Err(anyhow::anyhow!("Invalid streamer type"));
-        }
+    type Config = KafkaConfig;
 
-        let kafka_config = match config.kafka_config.clone() {
-            Some(kafka_config) => kafka_config,
-            None => return Err(anyhow::anyhow!("Missing Kafka config")),
-        };
-
+    fn new(config: &KafkaConfig) -> anyhow::Result<Box<Self>> {
         Ok(Box::new(Kafka {
-            config: kafka_config,
+            config: config.clone(),
             producer: None,
         }))
     }

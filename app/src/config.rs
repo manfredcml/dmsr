@@ -1,7 +1,7 @@
-use dms::connectors::config::ConnectorConfig;
+use dms::source_connector::config::ConnectorConfig;
 use dms::queue::config::QueueConfig;
-use dms::sources_targets::source_config::SourceConfig;
-use dms::sources_targets::target_config::TargetConfig;
+use dms::database::source_config::SourceConfig;
+use dms::database::target_config::TargetConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -24,11 +24,11 @@ impl AppConfig {
         let target_names = self.targets.iter().map(|x| &x.name).collect();
         let unique_targets = self.check_duplicate(target_names, "Target")?;
 
-        // Check if connectors have duplicated names
+        // Check if source_connector have duplicated names
         let connector_names = self.connectors.iter().map(|x| &x.name).collect();
         self.check_duplicate(connector_names, "Connector")?;
 
-        // Check if all connectors have valid source and target names
+        // Check if all source_connector have valid source and target names
         let non_existing_names: Vec<&String> = self
             .connectors
             .iter()
