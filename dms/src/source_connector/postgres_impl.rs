@@ -1,10 +1,9 @@
 use crate::event::event::ChangeEvent;
-use crate::event::postgres_event::PostgresEvent;
-use crate::event::raw_postgres_event::RawPostgresEvent;
-use crate::queue::queue::Queue;
+use crate::kafka::kafka_impl::Kafka;
 use crate::source_connector::connector::SourceConnector;
 use crate::source_connector::kind::SourceConnectorKind;
 use crate::source_connector::postgres_config::PostgresSourceConfig;
+use crate::source_connector::postgres_event::{PostgresEvent, RawPostgresEvent};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -32,17 +31,14 @@ impl SourceConnector for PostgresSourceConnector {
         }))
     }
 
-    fn get_source_name(&self) -> anyhow::Result<&String> {
-        Ok(&"test".to_string())
+    fn get_source_name(&self) -> anyhow::Result<String> {
+        Ok("test".to_string())
     }
 
     async fn connect(&mut self) -> anyhow::Result<()> {
         let endpoint = format!(
             "host={} port={} user={} password={} replication=database",
-            self.config.host,
-            self.config.port,
-            self.config.user,
-            self.config.password
+            self.config.host, self.config.port, self.config.user, self.config.password
         );
 
         let (client, connection) = tokio_postgres::connect(endpoint.as_str(), NoTls).await?;
@@ -57,7 +53,7 @@ impl SourceConnector for PostgresSourceConnector {
         Ok(())
     }
 
-    async fn stream(&mut self, queue: Arc<Mutex<Box<dyn Queue + Send>>>) -> anyhow::Result<()> {
+    async fn stream(&mut self, queue: Arc<Mutex<Kafka>>) -> anyhow::Result<()> {
         let client = match self.client.as_mut() {
             Some(client) => client,
             None => return Err(anyhow!("Failed to connect to Postgres")),
@@ -109,7 +105,7 @@ impl SourceConnector for PostgresSourceConnector {
                     let mut q = queue.lock().await;
                     for e in change_events {
                         println!("Ingesting: {:?}", e);
-                        q.ingest(e).await?;
+                        // q.ingest(e).await?;
                     }
                 }
                 b'k' => {
@@ -159,7 +155,6 @@ impl PostgresSourceConnector {
                     source_name: source_name.clone(),
                     source_kind: SourceConnectorKind::Postgres,
                     event_kind,
-                    postgres_event: Some(postgres_event),
                 })
             })
             .collect();

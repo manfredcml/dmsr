@@ -20,8 +20,8 @@ impl SinkConnector for PostgresSinkConnector {
         }))
     }
 
-    fn get_name(&self) -> anyhow::Result<&String> {
-        Ok(&"123".to_string())
+    fn get_name(&self) -> anyhow::Result<String> {
+        Ok("123".to_string())
     }
 
     async fn connect(&mut self) -> anyhow::Result<()> {

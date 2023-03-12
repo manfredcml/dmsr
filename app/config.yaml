@@ -22,7 +22,7 @@ connectors:
     target: target-postgres
 
 queue:
-  name: test-queue
+  name: test-kafka
   kind: kafka
   kafka:
     bootstrap_servers: localhost:9092
