@@ -16,7 +16,7 @@ pub struct Kafka {
 }
 
 impl Kafka {
-    fn new(config: &KafkaConfig) -> DMSRResult<Box<Self>> {
+    pub fn new(config: &KafkaConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(Kafka {
             config: config.clone(),
             admin: None,
@@ -24,7 +24,7 @@ impl Kafka {
         }))
     }
 
-    async fn connect(&mut self) -> DMSRResult<()> {
+    pub async fn connect(&mut self) -> DMSRResult<()> {
         let mut producer_config = ClientConfig::new();
         producer_config.set("bootstrap.servers", &self.config.bootstrap_servers);
         let producer: FutureProducer = producer_config.create()?;
@@ -38,7 +38,7 @@ impl Kafka {
         Ok(())
     }
 
-    async fn create_default_topics(&mut self) -> DMSRResult<()> {
+    pub async fn create_default_topics(&mut self) -> DMSRResult<()> {
         let admin = match &self.admin {
             Some(admin) => admin,
             None => {
@@ -49,7 +49,7 @@ impl Kafka {
             }
         };
 
-        let topic_name = "test_topic";
+        let topic_name = "test_topic_2";
         let topic = rdkafka::admin::NewTopic::new(topic_name, 1, TopicReplication::Fixed(1));
         let topic = topic.set("cleanup.policy", "compact");
         let topics = [topic];
@@ -61,7 +61,7 @@ impl Kafka {
         Ok(())
     }
 
-    async fn ingest(&mut self, event: ChangeEvent) -> anyhow::Result<()> {
+    pub async fn ingest(&mut self, event: ChangeEvent) -> anyhow::Result<()> {
         let producer = match &self.producer {
             Some(producer) => producer,
             None => return Err(anyhow::anyhow!("Producer not initialized")),

@@ -5,6 +5,9 @@ mod yaml;
 use actix_web::{get, App, HttpResponse, HttpServer};
 use args::Args;
 use clap::Parser;
+use dms::error::generic::DMSRResult;
+use dms::kafka::kafka_config::KafkaConfig;
+use dms::kafka::kafka_impl::Kafka;
 use futures::lock::Mutex;
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -18,11 +21,26 @@ pub async fn index() -> HttpResponse {
 }
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> DMSRResult<()> {
+    env_logger::init();
+
+    let kafka_config = KafkaConfig {
+        bootstrap_servers: "localhost:9092".to_string(),
+    };
+    let mut kafka = Kafka::new(&kafka_config)?;
+
+    info!("Connecting to Kafka...");
+    kafka.connect().await?;
+
+    info!("Creating default topics...");
+    kafka.create_default_topics().await?;
+
     HttpServer::new(|| App::new().service(index))
         .bind("127.0.0.1:8000")?
         .run()
-        .await
+        .await?;
+
+    Ok(())
 }
 
 // #[tokio::main]
