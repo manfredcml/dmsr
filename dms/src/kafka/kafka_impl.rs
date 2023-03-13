@@ -59,12 +59,10 @@ impl Kafka {
             }
         };
 
-        let topic_name = "test_topic_2";
-        let topic = rdkafka::admin::NewTopic::new(topic_name, 1, TopicReplication::Fixed(1));
-        let topic = topic.set("cleanup.policy", "compact");
+        let topic_name = &self.config.config_topic;
+        let topic = rdkafka::admin::NewTopic::new(topic_name, 1, TopicReplication::Fixed(1)).set("cleanup.policy", "compact");
         let topics = [topic];
         let options = AdminOptions::new();
-
         let result = admin.create_topics(&topics, &options).await?;
         println!("Result: {:?}", result);
 
