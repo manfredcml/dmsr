@@ -23,10 +23,11 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::Message;
 use serde_json::Value;
 use std::fs::File;
+use std::io::Write;
 
 #[tokio::main]
 async fn main() -> DMSRResult<()> {
-    env_logger::init();
+    init_log();
 
     let args = Args::parse();
 
@@ -58,6 +59,23 @@ async fn main() -> DMSRResult<()> {
     .await?;
 
     Ok(())
+}
+
+fn init_log() {
+    env_logger::builder()
+        .format(|buf, record| {
+            let ts = buf.timestamp_micros();
+            writeln!(
+                buf,
+                "{}: {:?}: {}: {}",
+                ts,
+                std::thread::current().id(),
+                buf.default_level_style(record.level())
+                    .value(record.level()),
+                record.args()
+            )
+        })
+        .init();
 }
 
 async fn init_kafka(config: &AppConfig) -> DMSRResult<Kafka> {
