@@ -22,8 +22,11 @@ use rdkafka::consumer::Consumer;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::Message;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::sync::{Arc, Mutex};
+use tokio::task::JoinHandle;
 
 #[tokio::main]
 async fn main() -> DMSRResult<()> {
@@ -108,10 +111,14 @@ async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
 
     consumer.subscribe(&[config_topic])?;
 
+    let active_connectors: HashMap<String, JoinHandle<DMSRResult<()>>> = HashMap::new();
+    let active_connectors = Arc::new(Mutex::new(active_connectors));
+
     loop {
         match consumer.recv().await {
             Ok(msg) => {
-                let result = parse_config_topic_message(&msg);
+                let c = Arc::clone(&active_connectors);
+                let result = parse_config_topic_message(&msg, c);
                 match result {
                     Ok(_) => {
                         info!("Message parsed successfully");
@@ -128,7 +135,10 @@ async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
     }
 }
 
-fn parse_config_topic_message(msg: &BorrowedMessage) -> DMSRResult<()> {
+fn parse_config_topic_message(
+    msg: &BorrowedMessage,
+    active_connectors: Arc<Mutex<HashMap<String, JoinHandle<DMSRResult<()>>>>>,
+) -> DMSRResult<()> {
     let key = msg.key().unwrap_or_default();
     let payload = msg.payload().unwrap_or_default();
 
@@ -155,11 +165,15 @@ fn parse_config_topic_message(msg: &BorrowedMessage) -> DMSRResult<()> {
             ConnectorKind::PostgresSource => {
                 let config: PostgresSourceConfig = serde_json::from_value(Value::Object(new_map))?;
                 info!("Parsed config: {:?}", config);
-                tokio::spawn(async move {
+                let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
                     let mut connector = PostgresSourceConnector::new(&config).unwrap();
                     connector.connect().await.unwrap();
                     info!("Connected to Postgres");
+                    Ok(())
                 });
+                let mut active_connectors = active_connectors.lock().unwrap();
+                active_connectors.insert(connector_name, handle);
+                info!("Active connectors: {:?}", active_connectors);
             }
             ConnectorKind::PostgresSink => {}
         }
