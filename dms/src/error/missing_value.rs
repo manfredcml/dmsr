@@ -3,7 +3,7 @@ use std::fmt::{self, Display};
 
 #[derive(Debug)]
 pub struct MissingValueError {
-    pub(crate) field_name: &'static str,
+    pub field_name: &'static str,
 }
 
 impl Error for MissingValueError {}

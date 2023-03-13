@@ -5,13 +5,16 @@ use crate::kafka::kafka_config::KafkaConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
+use rdkafka::consumer::StreamConsumer;
 use rdkafka::producer::FutureProducer;
 use std::time::Duration;
+use uuid::Uuid;
 
 pub struct Kafka {
     pub config: KafkaConfig,
     pub admin: Option<AdminClient<DefaultClientContext>>,
     pub producer: Option<FutureProducer>,
+    pub consumer: Option<StreamConsumer>,
 }
 
 impl Kafka {
@@ -20,6 +23,7 @@ impl Kafka {
             config: config.clone(),
             admin: None,
             producer: None,
+            consumer: None,
         })
     }
 
@@ -33,6 +37,13 @@ impl Kafka {
         admin_config.set("bootstrap.servers", &self.config.bootstrap_servers);
         let admin = admin_config.create()?;
         self.admin = Some(admin);
+
+        let mut consumer_config = ClientConfig::new();
+        consumer_config.set("group.id", Uuid::new_v4().to_string());
+        consumer_config.set("bootstrap.servers", &self.config.bootstrap_servers);
+        consumer_config.set("auto.offset.reset", "smallest");
+        let consumer = consumer_config.create()?;
+        self.consumer = Some(consumer);
 
         Ok(())
     }

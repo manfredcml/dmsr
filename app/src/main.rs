@@ -11,10 +11,12 @@ use crate::routes::index::index;
 use crate::state::AppState;
 use actix_web::{web, App, HttpServer};
 use clap::Parser;
-use dms::error::generic::DMSRResult;
+use dms::error::generic::{DMSRError, DMSRResult};
 use dms::kafka::kafka_config::KafkaConfig;
 use dms::kafka::kafka_impl::Kafka;
 use log::info;
+use rdkafka::consumer::Consumer;
+use rdkafka::Message;
 use std::fs::File;
 
 #[tokio::main]
@@ -27,7 +29,7 @@ async fn main() -> DMSRResult<()> {
     let config: AppConfig = serde_yaml::from_reader(config_file)?;
     println!("App Config: {:?}", config);
 
-    let kafka = init_kafka().await?;
+    let kafka = init_kafka(&config).await?;
     let app_state = web::Data::new(AppState { kafka });
 
     HttpServer::new(move || {
@@ -44,11 +46,8 @@ async fn main() -> DMSRResult<()> {
     Ok(())
 }
 
-async fn init_kafka() -> DMSRResult<Kafka> {
-    let kafka_config = KafkaConfig {
-        bootstrap_servers: "localhost:9092".to_string(),
-    };
-    let mut kafka = Kafka::new(&kafka_config)?;
+async fn init_kafka(config: &AppConfig) -> DMSRResult<Kafka> {
+    let mut kafka = Kafka::new(&config.kafka)?;
 
     info!("Connecting to Kafka...");
     kafka.connect().await?;
@@ -57,4 +56,36 @@ async fn init_kafka() -> DMSRResult<Kafka> {
     kafka.create_config_topic().await?;
 
     Ok(kafka)
+}
+
+async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
+    let config_topic = &config.kafka.config_topic;
+
+    let mut kafka = Kafka::new(&config.kafka)?;
+    kafka.connect().await?;
+
+    let consumer = match kafka.consumer {
+        Some(ref consumer) => consumer,
+        None => {
+            let err = dms::error::missing_value::MissingValueError {
+                field_name: "admin",
+            };
+            return Err(DMSRError::from(err));
+        }
+    };
+
+    consumer.subscribe(&[config_topic])?;
+
+    loop {
+        match consumer.recv().await {
+            Ok(msg) => {
+                let key = msg.key().unwrap_or_default();
+                let payload = msg.payload().unwrap_or_default();
+                println!("Received message: {:?} {:?}", key, payload);
+            }
+            Err(e) => {
+                println!("Kafka error: {}", e);
+            }
+        }
+    }
 }
