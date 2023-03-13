@@ -1,7 +1,10 @@
 mod args;
 mod config;
+mod routes;
 mod yaml;
 
+use crate::routes::connector::{get_connectors, post_connectors};
+use crate::routes::index::index;
 use actix_web::{get, App, HttpResponse, HttpServer};
 use args::Args;
 use clap::Parser;
@@ -14,11 +17,6 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-
-#[get("/")]
-pub async fn index() -> HttpResponse {
-    HttpResponse::Ok().body("Hello world!")
-}
 
 #[tokio::main]
 async fn main() -> DMSRResult<()> {
@@ -35,10 +33,15 @@ async fn main() -> DMSRResult<()> {
     info!("Creating default topics...");
     kafka.create_default_topics().await?;
 
-    HttpServer::new(|| App::new().service(index))
-        .bind("127.0.0.1:8000")?
-        .run()
-        .await?;
+    HttpServer::new(|| {
+        App::new()
+            .service(index)
+            .service(get_connectors)
+            .service(post_connectors)
+    })
+    .bind("127.0.0.1:8000")?
+    .run()
+    .await?;
 
     Ok(())
 }
