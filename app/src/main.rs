@@ -11,12 +11,15 @@ use crate::routes::index::index;
 use crate::state::AppState;
 use actix_web::{web, App, HttpServer};
 use clap::Parser;
+use dms::connector::kind::ConnectorKind;
+use dms::connector::postgres_source::config::PostgresSourceConfig;
 use dms::error::generic::{DMSRError, DMSRResult};
 use dms::kafka::kafka::Kafka;
 use log::info;
 use rdkafka::consumer::Consumer;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::Message;
+use serde_json::Value;
 use std::fs::File;
 
 #[tokio::main]
@@ -112,22 +115,29 @@ fn parse_config_topic_message(msg: &BorrowedMessage) -> DMSRResult<()> {
     let connector_name = String::from_utf8(key.to_vec())?;
 
     let connector_config = String::from_utf8(payload.to_vec())?;
-    let connector_config: serde_json::Value = serde_json::from_str(&connector_config)?;
+    let connector_config: Value = serde_json::from_str(&connector_config)?;
 
-    let connector_type = match connector_config["connector.type"].as_str() {
-        Some(connector_type) => connector_type,
-        None => {
-            let err = dms::error::missing_value::MissingValueError {
-                field_name: "connector.type",
-            };
-            return Err(DMSRError::from(err));
+    let connector_type = connector_config["connector_type"]
+        .as_str()
+        .unwrap_or_default();
+    let connector_type: ConnectorKind = connector_type.parse()?;
+
+    if let Value::Object(map) = connector_config {
+        let mut new_map = serde_json::Map::new();
+        for (key, value) in map {
+            if key != "connector_type" {
+                new_map.insert(key, value);
+            }
         }
-    };
-
-    info!(
-        "Received message: {:?} {:?}",
-        connector_name, connector_config
-    );
+        info!("New map: {:?}", new_map);
+        match connector_type {
+            ConnectorKind::PostgresSource => {
+                let config: PostgresSourceConfig = serde_json::from_value(Value::Object(new_map))?;
+                info!("Parsed config: {:?}", config);
+            }
+            ConnectorKind::PostgresSink => {}
+        }
+    }
 
     Ok(())
 }

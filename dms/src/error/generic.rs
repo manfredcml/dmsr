@@ -1,4 +1,5 @@
 use crate::error::missing_value::MissingValueError;
+use crate::error::unknown_connector::UnknownConnectorError;
 use rdkafka::error::KafkaError;
 
 pub type DMSRResult<T> = Result<T, DMSRError>;
@@ -11,6 +12,13 @@ pub enum DMSRError {
     SerdeYamlError(serde_yaml::Error),
     SerdeJsonError(serde_json::Error),
     FromUtf8Error(std::string::FromUtf8Error),
+    UnknownConnectorError(UnknownConnectorError),
+}
+
+impl From<UnknownConnectorError> for DMSRError {
+    fn from(error: UnknownConnectorError) -> Self {
+        DMSRError::UnknownConnectorError(error)
+    }
 }
 
 impl From<serde_json::Error> for DMSRError {
