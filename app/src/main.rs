@@ -11,8 +11,10 @@ use crate::routes::index::index;
 use crate::state::AppState;
 use actix_web::{web, App, HttpServer};
 use clap::Parser;
+use dms::connector::connector::Connector;
 use dms::connector::kind::ConnectorKind;
 use dms::connector::postgres_source::config::PostgresSourceConfig;
+use dms::connector::postgres_source::connector::PostgresSourceConnector;
 use dms::error::generic::{DMSRError, DMSRResult};
 use dms::kafka::kafka::Kafka;
 use log::info;
@@ -130,10 +132,16 @@ fn parse_config_topic_message(msg: &BorrowedMessage) -> DMSRResult<()> {
             }
         }
         info!("New map: {:?}", new_map);
+        info!("Connector type: {:?}", connector_type);
         match connector_type {
             ConnectorKind::PostgresSource => {
                 let config: PostgresSourceConfig = serde_json::from_value(Value::Object(new_map))?;
                 info!("Parsed config: {:?}", config);
+                tokio::spawn(async move {
+                    let mut connector = PostgresSourceConnector::new(&config).unwrap();
+                    connector.connect().await.unwrap();
+                    info!("Connected to Postgres");
+                });
             }
             ConnectorKind::PostgresSink => {}
         }
