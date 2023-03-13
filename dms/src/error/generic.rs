@@ -9,6 +9,20 @@ pub enum DMSRError {
     KafkaError(KafkaError),
     StdIoError(std::io::Error),
     SerdeYamlError(serde_yaml::Error),
+    SerdeJsonError(serde_json::Error),
+    FromUtf8Error(std::string::FromUtf8Error),
+}
+
+impl From<serde_json::Error> for DMSRError {
+    fn from(error: serde_json::Error) -> Self {
+        DMSRError::SerdeJsonError(error)
+    }
+}
+
+impl From<std::string::FromUtf8Error> for DMSRError {
+    fn from(error: std::string::FromUtf8Error) -> Self {
+        DMSRError::FromUtf8Error(error)
+    }
 }
 
 impl From<std::io::Error> for DMSRError {

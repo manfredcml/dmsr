@@ -1,9 +1,9 @@
+use crate::connector::connector::Connector;
+use crate::connector::kind::ConnectorKind;
+use crate::connector::postgres_source::config::PostgresSourceConfig;
+use crate::connector::postgres_source::event::{PostgresEvent, RawPostgresEvent};
 use crate::event::event::ChangeEvent;
-use crate::kafka::kafka_impl::Kafka;
-use crate::source_connector::connector::SourceConnector;
-use crate::source_connector::kind::SourceConnectorKind;
-use crate::source_connector::postgres_config::PostgresSourceConfig;
-use crate::source_connector::postgres_event::{PostgresEvent, RawPostgresEvent};
+use crate::kafka::kafka::Kafka;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -21,7 +21,7 @@ pub struct PostgresSourceConnector {
 }
 
 #[async_trait]
-impl SourceConnector for PostgresSourceConnector {
+impl Connector for PostgresSourceConnector {
     type Config = PostgresSourceConfig;
 
     fn new(config: &PostgresSourceConfig) -> anyhow::Result<Box<Self>> {
@@ -29,10 +29,6 @@ impl SourceConnector for PostgresSourceConnector {
             config: config.clone(),
             client: None,
         }))
-    }
-
-    fn get_source_name(&self) -> anyhow::Result<String> {
-        Ok("test".to_string())
     }
 
     async fn connect(&mut self) -> anyhow::Result<()> {
@@ -146,14 +142,15 @@ impl PostgresSourceConnector {
                     Err(_) => return None,
                 };
 
-                let source_name = match self.get_source_name() {
-                    Ok(source_name) => source_name,
-                    Err(_) => return None,
-                };
+                // let source_name = match self.get_source_name() {
+                //     Ok(source_name) => source_name,
+                //     Err(_) => return None,
+                // };
+                let source_name = "test".to_string();
 
                 Some(ChangeEvent {
-                    source_name: source_name.clone(),
-                    source_kind: SourceConnectorKind::Postgres,
+                    source_name: source_name,
+                    source_kind: ConnectorKind::PostgresSource,
                     event_kind,
                 })
             })

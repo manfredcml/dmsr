@@ -1,4 +1,4 @@
-use dms::kafka::kafka_config::KafkaConfig;
+use dms::kafka::config::KafkaConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

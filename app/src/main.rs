@@ -12,9 +12,10 @@ use crate::state::AppState;
 use actix_web::{web, App, HttpServer};
 use clap::Parser;
 use dms::error::generic::{DMSRError, DMSRResult};
-use dms::kafka::kafka_impl::Kafka;
+use dms::kafka::kafka::Kafka;
 use log::info;
 use rdkafka::consumer::Consumer;
+use rdkafka::message::BorrowedMessage;
 use rdkafka::Message;
 use std::fs::File;
 
@@ -87,13 +88,46 @@ async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
     loop {
         match consumer.recv().await {
             Ok(msg) => {
-                let key = msg.key().unwrap_or_default();
-                let payload = msg.payload().unwrap_or_default();
-                println!("Received message: {:?} {:?}", key, payload);
+                let result = parse_config_topic_message(&msg);
+                match result {
+                    Ok(_) => {
+                        info!("Message parsed successfully");
+                    }
+                    Err(e) => {
+                        info!("Error parsing message: {:?}", e);
+                    }
+                }
             }
             Err(e) => {
                 println!("Kafka error: {}", e);
             }
         }
     }
+}
+
+fn parse_config_topic_message(msg: &BorrowedMessage) -> DMSRResult<()> {
+    let key = msg.key().unwrap_or_default();
+    let payload = msg.payload().unwrap_or_default();
+
+    let connector_name = String::from_utf8(key.to_vec())?;
+
+    let connector_config = String::from_utf8(payload.to_vec())?;
+    let connector_config: serde_json::Value = serde_json::from_str(&connector_config)?;
+
+    let connector_type = match connector_config["connector.type"].as_str() {
+        Some(connector_type) => connector_type,
+        None => {
+            let err = dms::error::missing_value::MissingValueError {
+                field_name: "connector.type",
+            };
+            return Err(DMSRError::from(err));
+        }
+    };
+
+    info!(
+        "Received message: {:?} {:?}",
+        connector_name, connector_config
+    );
+
+    Ok(())
 }

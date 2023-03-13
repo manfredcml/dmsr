@@ -1,7 +1,7 @@
 use crate::error::generic::{DMSRError, DMSRResult};
 use crate::error::missing_value::MissingValueError;
 use crate::event::event::ChangeEvent;
-use crate::kafka::kafka_config::KafkaConfig;
+use crate::kafka::config::KafkaConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;

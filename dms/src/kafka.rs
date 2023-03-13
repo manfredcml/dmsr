@@ -1,2 +1,2 @@
-pub mod kafka_config;
-pub mod kafka_impl;
+pub mod config;
+pub mod kafka;

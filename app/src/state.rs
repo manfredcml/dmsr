@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use dms::kafka::kafka_impl::Kafka;
+use dms::kafka::kafka::Kafka;
 
 pub struct AppState {
     pub kafka: Kafka,
