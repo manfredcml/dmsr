@@ -12,7 +12,6 @@ use crate::state::AppState;
 use actix_web::{web, App, HttpServer};
 use clap::Parser;
 use dms::error::generic::{DMSRError, DMSRResult};
-use dms::kafka::kafka_config::KafkaConfig;
 use dms::kafka::kafka_impl::Kafka;
 use log::info;
 use rdkafka::consumer::Consumer;
@@ -32,6 +31,11 @@ async fn main() -> DMSRResult<()> {
     let kafka = init_kafka(&config).await?;
     let app_state = web::Data::new(AppState { kafka });
 
+    tokio::spawn(async move {
+        subscribe_to_config_topic(&config).await.unwrap();
+    });
+
+    info!("Starting HTTP server...");
     HttpServer::new(move || {
         App::new()
             .app_data(app_state.clone())
