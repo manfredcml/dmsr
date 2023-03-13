@@ -1,7 +1,9 @@
 use crate::AppState;
 use actix_web::{get, post, web, HttpResponse};
+use rdkafka::producer::FutureRecord;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Deserialize, Serialize, Debug)]
 struct GetResponse {
@@ -10,8 +12,8 @@ struct GetResponse {
 }
 
 #[get("/connectors")]
-pub async fn get_connectors(app_data: web::Data<AppState>) -> HttpResponse {
-    let config = &app_data.kafka.config;
+pub async fn get_connectors(state: web::Data<AppState>) -> HttpResponse {
+    let config = &state.kafka.config;
     println!("config: {:?}", config);
 
     let resp = GetResponse {
@@ -28,11 +30,32 @@ pub struct PostBody {
 }
 
 #[post("/connectors")]
-pub async fn post_connectors(body: web::Json<PostBody>) -> HttpResponse {
-    println!("body: {:?}", body);
+pub async fn post_connectors(
+    body: web::Json<PostBody>,
+    state: web::Data<AppState>,
+) -> HttpResponse {
+    let kafka = &state.kafka;
+    let producer = match kafka.producer {
+        Some(ref producer) => producer,
+        None => return HttpResponse::InternalServerError().finish(),
+    };
 
-    let config = &body.config;
-    println!("config: {:?}", config);
+    let topic = &kafka.config.config_topic;
+    let key = body.name.as_bytes();
+    let message = body.config.to_string();
+    let message = message.as_bytes();
 
-    HttpResponse::Ok().json(body)
+    let record = FutureRecord::to(topic).key(key).payload(message);
+    let status = producer.send(record, Duration::from_secs(0)).await;
+
+    match status {
+        Ok(r) => {
+            println!("Message sent: {:?}", r);
+            HttpResponse::Ok().json(body)
+        }
+        Err(e) => {
+            println!("Error sending message: {:?}", e);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }

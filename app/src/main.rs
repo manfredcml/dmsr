@@ -29,10 +29,14 @@ async fn main() -> DMSRResult<()> {
     println!("App Config: {:?}", config);
 
     let kafka = init_kafka(&config).await?;
-    let app_state = web::Data::new(AppState { kafka });
+    let app_state = web::Data::new(AppState {
+        kafka,
+        app_config: config.clone(),
+    });
 
+    let config_clone = config.clone();
     tokio::spawn(async move {
-        subscribe_to_config_topic(&config).await.unwrap();
+        subscribe_to_config_topic(&config_clone).await.unwrap();
     });
 
     info!("Starting HTTP server...");
@@ -43,7 +47,7 @@ async fn main() -> DMSRResult<()> {
             .service(get_connectors)
             .service(post_connectors)
     })
-    .bind("127.0.0.1:8000")?
+    .bind(format!("127.0.0.1:{}", config.port))?
     .run()
     .await?;
 
