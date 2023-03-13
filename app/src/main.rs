@@ -1,40 +1,38 @@
 mod args;
 mod config;
 mod routes;
+mod state;
 mod yaml;
 
+use crate::args::Args;
+use crate::config::AppConfig;
 use crate::routes::connector::{get_connectors, post_connectors};
 use crate::routes::index::index;
-use actix_web::{get, App, HttpResponse, HttpServer};
-use args::Args;
+use crate::state::AppState;
+use actix_web::{web, App, HttpServer};
 use clap::Parser;
 use dms::error::generic::DMSRResult;
 use dms::kafka::kafka_config::KafkaConfig;
 use dms::kafka::kafka_impl::Kafka;
-use futures::lock::Mutex;
 use log::info;
-use serde::{Deserialize, Serialize};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
+use std::fs::File;
 
 #[tokio::main]
 async fn main() -> DMSRResult<()> {
     env_logger::init();
 
-    let kafka_config = KafkaConfig {
-        bootstrap_servers: "localhost:9092".to_string(),
-    };
-    let mut kafka = Kafka::new(&kafka_config)?;
+    let args = Args::parse();
 
-    info!("Connecting to Kafka...");
-    kafka.connect().await?;
+    let config_file = File::open(args.config_path)?;
+    let config: AppConfig = serde_yaml::from_reader(config_file)?;
+    println!("App Config: {:?}", config);
 
-    info!("Creating default topics...");
-    kafka.create_default_topics().await?;
+    let kafka = init_kafka().await?;
+    let app_state = web::Data::new(AppState { kafka });
 
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         App::new()
+            .app_data(app_state.clone())
             .service(index)
             .service(get_connectors)
             .service(post_connectors)
@@ -46,42 +44,17 @@ async fn main() -> DMSRResult<()> {
     Ok(())
 }
 
-// #[tokio::main]
-// async fn main() -> anyhow::Result<()> {
-//     env_logger::init();
-//
-//     info!("Starting up...");
-//
-//     let args = Args::parse();
-//     let config = yaml::load_config(&args.config_path)?;
-//     config.validate()?;
-//
-//     info!("Config: {:?}", config);
-//
-//     let mut kafka = config.kafka.get_streamer()?;
-//     kafka.connect().await?;
-//     info!("connected!!");
-//
-//     let kafka = Arc::new(Mutex::new(kafka));
-//
-//     // Start database
-//     let mut sources: Vec<Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>> = Vec::new();
-//
-//     for sc in config.sources {
-//         let mut source = sc.get_source()?;
-//
-//         let q = Arc::clone(&kafka);
-//         let source_future = async move {
-//             source.connect().await?;
-//             source.stream(q).await?;
-//             Ok(())
-//         };
-//
-//         sources.push(Box::pin(source_future));
-//     }
-//
-//     futures::future::try_join_all(sources.into_iter().map(tokio::spawn)).await?;
-//
-//     info!("Terminating...");
-//     Ok(())
-// }
+async fn init_kafka() -> DMSRResult<Kafka> {
+    let kafka_config = KafkaConfig {
+        bootstrap_servers: "localhost:9092".to_string(),
+    };
+    let mut kafka = Kafka::new(&kafka_config)?;
+
+    info!("Connecting to Kafka...");
+    kafka.connect().await?;
+
+    info!("Creating default topic...");
+    kafka.create_config_topic().await?;
+
+    Ok(kafka)
+}

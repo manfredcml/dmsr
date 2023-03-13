@@ -1,28 +1,3 @@
-sources:
-  - name: "source-postgres"
-    kind: postgres
-    postgres:
-      host: "localhost"
-      port: 5432
-      user: postgres
-      password: postgres
-
-targets:
-  - name: "target-postgres"
-    kind: postgres
-    postgres:
-      host: "localhost"
-      port: 5432
-      user: postgres
-      password: postgres
-
-connectors:
-  - name: postgres-postgres
-    source: source-postgres
-    target: target-postgres
-
-queue:
-  name: test-kafka
-  kind: kafka
-  kafka:
-    bootstrap_servers: localhost:9092
+kafka:
+  bootstrap_servers: "localhost:9092"
+  config_topic: "dmsr_connector_config"

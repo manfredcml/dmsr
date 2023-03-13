@@ -6,22 +6,21 @@ use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
-use std::error::Error;
 use std::time::Duration;
 
 pub struct Kafka {
-    config: KafkaConfig,
-    admin: Option<AdminClient<DefaultClientContext>>,
-    producer: Option<FutureProducer>,
+    pub config: KafkaConfig,
+    pub admin: Option<AdminClient<DefaultClientContext>>,
+    pub producer: Option<FutureProducer>,
 }
 
 impl Kafka {
-    pub fn new(config: &KafkaConfig) -> DMSRResult<Box<Self>> {
-        Ok(Box::new(Kafka {
+    pub fn new(config: &KafkaConfig) -> DMSRResult<Self> {
+        Ok(Kafka {
             config: config.clone(),
             admin: None,
             producer: None,
-        }))
+        })
     }
 
     pub async fn connect(&mut self) -> DMSRResult<()> {
@@ -38,7 +37,7 @@ impl Kafka {
         Ok(())
     }
 
-    pub async fn create_default_topics(&mut self) -> DMSRResult<()> {
+    pub async fn create_config_topic(&mut self) -> DMSRResult<()> {
         let admin = match &self.admin {
             Some(admin) => admin,
             None => {

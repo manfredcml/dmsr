@@ -8,6 +8,7 @@ pub enum DMSRError {
     MissingValueError(MissingValueError),
     KafkaError(KafkaError),
     StdIoError(std::io::Error),
+    SerdeYamlError(serde_yaml::Error),
 }
 
 impl From<std::io::Error> for DMSRError {
@@ -25,5 +26,11 @@ impl From<KafkaError> for DMSRError {
 impl From<MissingValueError> for DMSRError {
     fn from(error: MissingValueError) -> Self {
         DMSRError::MissingValueError(error)
+    }
+}
+
+impl From<serde_yaml::Error> for DMSRError {
+    fn from(error: serde_yaml::Error) -> Self {
+        DMSRError::SerdeYamlError(error)
     }
 }
