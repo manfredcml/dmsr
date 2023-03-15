@@ -1,4 +1,4 @@
-use crate::error::unknown_connector::UnknownConnectorError;
+use crate::error::generic::DMSRError;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -12,18 +12,13 @@ pub enum ConnectorKind {
 }
 
 impl FromStr for ConnectorKind {
-    type Err = UnknownConnectorError;
+    type Err = DMSRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "postgres_sink" => Ok(ConnectorKind::PostgresSink),
             "postgres_source" => Ok(ConnectorKind::PostgresSource),
-            _ => {
-                let err = UnknownConnectorError {
-                    connector: s.to_string(),
-                };
-                Err(err)
-            }
+            _ => Err(DMSRError::UnknownConnectorError(s.to_string())),
         }
     }
 }

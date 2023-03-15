@@ -17,7 +17,7 @@ use dms::connector::postgres_source::config::PostgresSourceConfig;
 use dms::connector::postgres_source::connector::PostgresSourceConnector;
 use dms::error::generic::{DMSRError, DMSRResult};
 use dms::kafka::kafka::Kafka;
-use log::info;
+use log::{error, info};
 use rdkafka::consumer::Consumer;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::Message;
@@ -124,7 +124,7 @@ async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
                         info!("Message parsed successfully");
                     }
                     Err(e) => {
-                        info!("Error parsing message: {:?}", e);
+                        error!("{:?}", e);
                     }
                 }
             }
@@ -168,7 +168,9 @@ fn parse_config_topic_message(
                 let config: PostgresSourceConfig = serde_json::from_value(Value::Object(new_map))?;
                 let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
                     let mut connector = PostgresSourceConnector::new(&config).unwrap();
+                    info!("Connecting to Postgres...");
                     connector.connect().await?;
+                    info!("Starting stream...");
                     connector.stream(kafka).await?;
                     Ok(())
                 });

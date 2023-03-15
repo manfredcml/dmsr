@@ -1,6 +1,6 @@
 use crate::error::missing_value::MissingValueError;
-use crate::error::unknown_connector::UnknownConnectorError;
 use rdkafka::error::KafkaError;
+use std::time;
 
 pub type DMSRResult<T> = Result<T, DMSRError>;
 
@@ -11,20 +11,28 @@ pub enum DMSRError {
     StdIoError(std::io::Error),
     SerdeYamlError(serde_yaml::Error),
     SerdeJsonError(serde_json::Error),
-    FromUtf8Error(std::string::FromUtf8Error),
-    UnknownConnectorError(UnknownConnectorError),
-    TokioPostgresError(tokio_postgres::Error),
+    Utf8Error(String),
+    UnknownConnectorError(String),
+    PostgresError(String),
+    SystemTimeError(String),
+    TryFromIntError(String),
+}
+
+impl From<time::SystemTimeError> for DMSRError {
+    fn from(error: time::SystemTimeError) -> Self {
+        DMSRError::SystemTimeError(error.to_string())
+    }
+}
+
+impl From<std::num::TryFromIntError> for DMSRError {
+    fn from(error: std::num::TryFromIntError) -> Self {
+        DMSRError::TryFromIntError(error.to_string())
+    }
 }
 
 impl From<tokio_postgres::Error> for DMSRError {
     fn from(error: tokio_postgres::Error) -> Self {
-        DMSRError::TokioPostgresError(error)
-    }
-}
-
-impl From<UnknownConnectorError> for DMSRError {
-    fn from(error: UnknownConnectorError) -> Self {
-        DMSRError::UnknownConnectorError(error)
+        DMSRError::PostgresError(error.to_string())
     }
 }
 
@@ -36,7 +44,13 @@ impl From<serde_json::Error> for DMSRError {
 
 impl From<std::string::FromUtf8Error> for DMSRError {
     fn from(error: std::string::FromUtf8Error) -> Self {
-        DMSRError::FromUtf8Error(error)
+        DMSRError::Utf8Error(error.to_string())
+    }
+}
+
+impl From<std::str::Utf8Error> for DMSRError {
+    fn from(error: std::str::Utf8Error) -> Self {
+        DMSRError::Utf8Error(error.to_string())
     }
 }
 
