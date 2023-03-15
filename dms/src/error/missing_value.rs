@@ -6,6 +6,12 @@ pub struct MissingValueError {
     pub field_name: &'static str,
 }
 
+impl MissingValueError {
+    pub fn new(field_name: &'static str) -> Self {
+        MissingValueError { field_name }
+    }
+}
+
 impl Error for MissingValueError {}
 
 impl Display for MissingValueError {

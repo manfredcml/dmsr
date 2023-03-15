@@ -2,6 +2,8 @@ use crate::connector::connector::Connector;
 use crate::connector::kind::ConnectorKind;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
 use crate::connector::postgres_source::event::{PostgresEvent, RawPostgresEvent};
+use crate::error::generic::DMSRResult;
+use crate::error::missing_value::MissingValueError;
 use crate::event::event::ChangeEvent;
 use crate::kafka::kafka::Kafka;
 use anyhow::anyhow;
@@ -24,14 +26,14 @@ pub struct PostgresSourceConnector {
 impl Connector for PostgresSourceConnector {
     type Config = PostgresSourceConfig;
 
-    fn new(config: &PostgresSourceConfig) -> anyhow::Result<Box<Self>> {
+    fn new(config: &PostgresSourceConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(PostgresSourceConnector {
             config: config.clone(),
             client: None,
         }))
     }
 
-    async fn connect(&mut self) -> anyhow::Result<()> {
+    async fn connect(&mut self) -> DMSRResult<()> {
         let endpoint = format!(
             "host={} port={} user={} password={} replication=database",
             self.config.host, self.config.port, self.config.user, self.config.password
@@ -49,69 +51,74 @@ impl Connector for PostgresSourceConnector {
         Ok(())
     }
 
-    async fn stream(&mut self, queue: Arc<Mutex<Kafka>>) -> anyhow::Result<()> {
-        let client = match self.client.as_mut() {
-            Some(client) => client,
-            None => return Err(anyhow!("Failed to connect to Postgres")),
-        };
+    async fn stream(&mut self, queue: Kafka) -> DMSRResult<()> {
+        println!("Stream running");
 
-        let slot_name = format!(
-            "slot_{}",
-            &SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs()
-        );
-
-        let slot_query = format!(
-            "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL \"wal2json\"",
-            slot_name
-        );
-
-        let slot_query_res: Vec<SimpleQueryRow> = client
-            .simple_query(slot_query.as_str())
-            .await?
-            .into_iter()
-            .filter_map(|m| match m {
-                SimpleQueryMessage::Row(r) => Some(r),
-                _ => None,
-            })
-            .collect();
-
-        let lsn = match slot_query_res[0].get("consistent_point") {
-            Some(lsn) => lsn,
-            None => return Err(anyhow!("Failed to get LSN")),
-        };
-
-        let query = format!("START_REPLICATION SLOT {} LOGICAL {}", slot_name, lsn);
-
-        let duplex_stream = client.copy_both_simple::<Bytes>(&query).await?;
-
-        let mut duplex_stream_pin = Box::pin(duplex_stream);
-
-        loop {
-            let event = match duplex_stream_pin.as_mut().next().await {
-                Some(event_res) => event_res,
-                None => break,
-            }?;
-
-            match event[0] {
-                b'w' => {
-                    let change_events = Self::parse_event(&self, event)?;
-                    let mut q = queue.lock().await;
-                    for e in change_events {
-                        println!("Ingesting: {:?}", e);
-                        // q.ingest(e).await?;
-                    }
-                }
-                b'k' => {
-                    Self::keep_alive(event, &mut duplex_stream_pin).await?;
-                }
-                _ => {
-                    println!("Not recognized: {:?}", event);
-                }
-            }
-        }
+        // let client = match self.client.as_mut() {
+        //     Some(client) => client,
+        //     None => {
+        //         let err = MissingValueError::new("Client is not initialized");
+        //         return Err(err.into());
+        //     }
+        // };
+        //
+        // let slot_name = format!(
+        //     "slot_{}",
+        //     &SystemTime::now()
+        //         .duration_since(SystemTime::UNIX_EPOCH)
+        //         .expect("Time went backwards")
+        //         .as_secs()
+        // );
+        //
+        // let slot_query = format!(
+        //     "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL \"wal2json\"",
+        //     slot_name
+        // );
+        //
+        // let slot_query_res: Vec<SimpleQueryRow> = client
+        //     .simple_query(slot_query.as_str())
+        //     .await?
+        //     .into_iter()
+        //     .filter_map(|m| match m {
+        //         SimpleQueryMessage::Row(r) => Some(r),
+        //         _ => None,
+        //     })
+        //     .collect();
+        //
+        // let lsn = match slot_query_res[0].get("consistent_point") {
+        //     Some(lsn) => lsn,
+        //     None => return Err(anyhow!("Failed to get LSN")),
+        // };
+        //
+        // let query = format!("START_REPLICATION SLOT {} LOGICAL {}", slot_name, lsn);
+        //
+        // let duplex_stream = client.copy_both_simple::<Bytes>(&query).await?;
+        //
+        // let mut duplex_stream_pin = Box::pin(duplex_stream);
+        //
+        // loop {
+        //     let event = match duplex_stream_pin.as_mut().next().await {
+        //         Some(event_res) => event_res,
+        //         None => break,
+        //     }?;
+        //
+        //     match event[0] {
+        //         b'w' => {
+        //             let change_events = Self::parse_event(&self, event)?;
+        //             let mut q = queue.lock().await;
+        //             for e in change_events {
+        //                 println!("Ingesting: {:?}", e);
+        //                 // q.ingest(e).await?;
+        //             }
+        //         }
+        //         b'k' => {
+        //             Self::keep_alive(event, &mut duplex_stream_pin).await?;
+        //         }
+        //         _ => {
+        //             println!("Not recognized: {:?}", event);
+        //         }
+        //     }
+        // }
 
         Ok(())
     }

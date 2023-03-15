@@ -13,6 +13,13 @@ pub enum DMSRError {
     SerdeJsonError(serde_json::Error),
     FromUtf8Error(std::string::FromUtf8Error),
     UnknownConnectorError(UnknownConnectorError),
+    TokioPostgresError(tokio_postgres::Error),
+}
+
+impl From<tokio_postgres::Error> for DMSRError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        DMSRError::TokioPostgresError(error)
+    }
 }
 
 impl From<UnknownConnectorError> for DMSRError {

@@ -118,7 +118,7 @@ async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
         match consumer.recv().await {
             Ok(msg) => {
                 let c = Arc::clone(&active_connectors);
-                let result = parse_config_topic_message(&msg, c);
+                let result = parse_config_topic_message(config, &msg, c);
                 match result {
                     Ok(_) => {
                         info!("Message parsed successfully");
@@ -136,6 +136,7 @@ async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
 }
 
 fn parse_config_topic_message(
+    config: &AppConfig,
     msg: &BorrowedMessage,
     active_connectors: Arc<Mutex<HashMap<String, JoinHandle<DMSRResult<()>>>>>,
 ) -> DMSRResult<()> {
@@ -154,26 +155,25 @@ fn parse_config_topic_message(
 
     if let Value::Object(map) = connector_config {
         let mut new_map = serde_json::Map::new();
+
         for (key, value) in map {
             if key != "connector_type" {
                 new_map.insert(key, value);
             }
         }
-        info!("New map: {:?}", new_map);
-        info!("Connector type: {:?}", connector_type);
+
         match connector_type {
             ConnectorKind::PostgresSource => {
+                let kafka = Kafka::new(&config.kafka)?;
                 let config: PostgresSourceConfig = serde_json::from_value(Value::Object(new_map))?;
-                info!("Parsed config: {:?}", config);
                 let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
                     let mut connector = PostgresSourceConnector::new(&config).unwrap();
-                    connector.connect().await.unwrap();
-                    info!("Connected to Postgres");
+                    connector.connect().await?;
+                    connector.stream(kafka).await?;
                     Ok(())
                 });
                 let mut active_connectors = active_connectors.lock().unwrap();
                 active_connectors.insert(connector_name, handle);
-                info!("Active connectors: {:?}", active_connectors);
             }
             ConnectorKind::PostgresSink => {}
         }
