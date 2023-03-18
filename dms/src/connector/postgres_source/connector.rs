@@ -1,18 +1,16 @@
 use crate::connector::connector::Connector;
-use crate::connector::kind::ConnectorKind;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
-use crate::connector::postgres_source::event::{PostgresEvent, RawPostgresEvent};
+use crate::connector::postgres_source::event::RawPostgresEvent;
 use crate::error::generic::{DMSRError, DMSRResult};
 use crate::error::missing_value::MissingValueError;
-use crate::event::event::ChangeEvent;
+use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
 use crate::kafka::kafka::Kafka;
-use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::lock::Mutex;
 use futures::{future, ready, Sink, StreamExt};
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
@@ -51,7 +49,7 @@ impl Connector for PostgresSourceConnector {
         Ok(())
     }
 
-    async fn stream(&mut self, queue: Kafka) -> DMSRResult<()> {
+    async fn stream(&mut self, kafka: Kafka) -> DMSRResult<()> {
         let client = match self.client.as_mut() {
             Some(client) => client,
             None => {
@@ -104,7 +102,7 @@ impl Connector for PostgresSourceConnector {
 
             match event[0] {
                 b'w' => {
-                    let change_events = Self::parse_event(&self, event)?;
+                    let change_events = Self::parse_event(event)?;
                     for e in change_events {
                         println!("Ingesting: {:?}", e);
                         // q.ingest(e).await?;
@@ -124,40 +122,70 @@ impl Connector for PostgresSourceConnector {
 }
 
 impl PostgresSourceConnector {
-    fn parse_event(&self, event: Bytes) -> DMSRResult<Vec<ChangeEvent>> {
+    fn parse_event(event: Bytes) -> DMSRResult<Vec<JSONChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
-        println!("{}", s);
 
         let raw_event: RawPostgresEvent = serde_json::from_str(s)?;
+        println!("{:?}", raw_event);
 
-        let change_events: Vec<_> = raw_event
+        let change_events: Vec<JSONChangeEvent> = raw_event
             .change
-            .into_iter()
+            .iter()
             .filter_map(|c| {
-                let postgres_event = PostgresEvent {
-                    schema: c.schema,
-                    table: c.table,
-                    column_names: c.column_names,
-                    column_types: c.column_types,
-                    column_values: c.column_values,
+                // Get operation
+                let operation = match c.kind.as_str() {
+                    "insert" => Operation::Create,
+                    "update" => Operation::Update,
+                    "delete" => Operation::Delete,
+                    _ => return None,
                 };
 
-                let event_kind = match c.kind.as_str().parse() {
-                    Ok(event_kind) => event_kind,
-                    Err(_) => return None,
+                // Get schema
+                let column_names = &c.column_names;
+                let column_types = &c.column_types;
+                let fields: Vec<Field> = column_names
+                    .iter()
+                    .zip(column_types.iter())
+                    .filter_map(|(name, ty)| {
+                        let ty: DataType = match ty.as_str() {
+                            "integer" => DataType::Int32,
+                            s if s.starts_with("character varying") => DataType::String,
+                            _ => DataType::None,
+                        };
+
+                        if ty == DataType::None {
+                            return None;
+                        }
+
+                        Some(Field {
+                            r#type: ty,
+                            optional: false,
+                            field: name.clone(),
+                        })
+                    })
+                    .collect();
+
+                if fields.len() != c.column_values.len() {
+                    return None;
+                }
+
+                let schema = Schema {
+                    r#type: DataType::Struct,
+                    fields,
                 };
 
-                // let source_name = match self.get_source_name() {
-                //     Ok(source_name) => source_name,
-                //     Err(_) => return None,
-                // };
-                let source_name = "test".to_string();
+                // Get payload
+                let column_values = &c.column_values;
+                let mut payload: HashMap<String, serde_json::Value> = HashMap::new();
+                for (name, value) in column_names.iter().zip(column_values.iter()) {
+                    payload.insert(name.clone(), value.clone());
+                }
 
-                Some(ChangeEvent {
-                    source_name: source_name,
-                    source_kind: ConnectorKind::PostgresSource,
-                    event_kind,
+                Some(JSONChangeEvent {
+                    schema,
+                    payload,
+                    op: operation,
                 })
             })
             .collect();

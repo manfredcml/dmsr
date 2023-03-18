@@ -1,6 +1,6 @@
 use crate::error::generic::{DMSRError, DMSRResult};
 use crate::error::missing_value::MissingValueError;
-use crate::event::event::ChangeEvent;
+use crate::event::event::JSONChangeEvent;
 use crate::kafka::config::KafkaConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
 use rdkafka::client::DefaultClientContext;
@@ -60,7 +60,8 @@ impl Kafka {
         };
 
         let topic_name = &self.config.config_topic;
-        let topic = rdkafka::admin::NewTopic::new(topic_name, 1, TopicReplication::Fixed(1)).set("cleanup.policy", "compact");
+        let topic = rdkafka::admin::NewTopic::new(topic_name, 1, TopicReplication::Fixed(1))
+            .set("cleanup.policy", "compact");
         let topics = [topic];
         let options = AdminOptions::new();
         let result = admin.create_topics(&topics, &options).await?;
@@ -69,7 +70,7 @@ impl Kafka {
         Ok(())
     }
 
-    pub async fn ingest(&mut self, event: ChangeEvent) -> anyhow::Result<()> {
+    pub async fn ingest(&mut self, event: JSONChangeEvent) -> anyhow::Result<()> {
         let producer = match &self.producer {
             Some(producer) => producer,
             None => return Err(anyhow::anyhow!("Producer not initialized")),
