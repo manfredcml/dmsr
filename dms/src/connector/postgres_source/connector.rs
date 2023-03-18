@@ -9,7 +9,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{future, ready, Sink, StreamExt};
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::pin::Pin;
 use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -104,7 +103,10 @@ impl Connector for PostgresSourceConnector {
                 b'w' => {
                     let change_events = Self::parse_event(event)?;
                     for e in change_events {
-                        println!("Ingesting: {:?}", e);
+                        // Convert e to String
+                        let e = serde_json::to_string(&e)?;
+                        println!("Sending: {}", e);
+
                         // q.ingest(e).await?;
                     }
                 }

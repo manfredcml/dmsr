@@ -11,6 +11,7 @@ use crate::routes::index::index;
 use crate::state::AppState;
 use actix_web::{web, App, HttpServer};
 use clap::Parser;
+use dms::connector::config::ConnectorConfig;
 use dms::connector::connector::Connector;
 use dms::connector::kind::ConnectorKind;
 use dms::connector::postgres_source::config::PostgresSourceConfig;
@@ -145,40 +146,29 @@ fn parse_config_topic_message(
 
     let connector_name = String::from_utf8(key.to_vec())?;
 
-    let connector_config = String::from_utf8(payload.to_vec())?;
-    let connector_config: Value = serde_json::from_str(&connector_config)?;
+    let payload = String::from_utf8(payload.to_vec())?;
+    let payload: ConnectorConfig = serde_json::from_str(&payload)?;
 
-    let connector_type = connector_config["connector_type"]
-        .as_str()
-        .unwrap_or_default();
-    let connector_type: ConnectorKind = connector_type.parse()?;
+    println!("Payload: {:?}", payload);
 
-    if let Value::Object(map) = connector_config {
-        let mut new_map = serde_json::Map::new();
+    let connector_config = payload.config.clone();
 
-        for (key, value) in map {
-            if key != "connector_type" {
-                new_map.insert(key, value);
-            }
+    match payload.connector_type {
+        ConnectorKind::PostgresSource => {
+            let kafka = Kafka::new(&config.kafka)?;
+            let config: PostgresSourceConfig = serde_json::from_value(connector_config)?;
+            let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
+                let mut connector = PostgresSourceConnector::new(&config).unwrap();
+                info!("Connecting to Postgres...");
+                connector.connect().await?;
+                info!("Starting stream...");
+                connector.stream(kafka).await?;
+                Ok(())
+            });
+            let mut active_connectors = active_connectors.lock().unwrap();
+            active_connectors.insert(connector_name, handle);
         }
-
-        match connector_type {
-            ConnectorKind::PostgresSource => {
-                let kafka = Kafka::new(&config.kafka)?;
-                let config: PostgresSourceConfig = serde_json::from_value(Value::Object(new_map))?;
-                let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
-                    let mut connector = PostgresSourceConnector::new(&config).unwrap();
-                    info!("Connecting to Postgres...");
-                    connector.connect().await?;
-                    info!("Starting stream...");
-                    connector.stream(kafka).await?;
-                    Ok(())
-                });
-                let mut active_connectors = active_connectors.lock().unwrap();
-                active_connectors.insert(connector_name, handle);
-            }
-            ConnectorKind::PostgresSink => {}
-        }
+        ConnectorKind::PostgresSink => {}
     }
 
     Ok(())
