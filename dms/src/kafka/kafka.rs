@@ -1,5 +1,4 @@
 use crate::error::generic::{DMSRError, DMSRResult};
-use crate::error::missing_value::MissingValueError;
 use crate::event::event::JSONChangeEvent;
 use crate::kafka::config::KafkaConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
@@ -51,12 +50,7 @@ impl Kafka {
     pub async fn create_config_topic(&mut self) -> DMSRResult<()> {
         let admin = match &self.admin {
             Some(admin) => admin,
-            None => {
-                let err = MissingValueError {
-                    field_name: "admin",
-                };
-                return Err(DMSRError::from(err));
-            }
+            None => return Err(DMSRError::MissingValueError("Missing admin".to_string())),
         };
 
         let topic_name = &self.config.config_topic;
@@ -70,21 +64,27 @@ impl Kafka {
         Ok(())
     }
 
-    pub async fn ingest(&mut self, event: JSONChangeEvent) -> anyhow::Result<()> {
+    pub async fn ingest(
+        &mut self,
+        topic: String,
+        event: JSONChangeEvent,
+        key: Option<String>,
+    ) -> DMSRResult<()> {
         let producer = match &self.producer {
             Some(producer) => producer,
-            None => return Err(anyhow::anyhow!("Producer not initialized")),
+            None => return Err(DMSRError::MissingValueError("Missing producer".to_string())),
         };
-
-        let key = "my_key";
-        let topic = "test_topic";
         let message = serde_json::to_string(&event)?;
 
-        println!("Message: {}", message);
+        println!("Kafka message: {}", message);
 
-        let record = rdkafka::producer::FutureRecord::to(topic)
-            .payload(message.as_str())
-            .key(key);
+        let mut record =
+            rdkafka::producer::FutureRecord::to(topic.as_str()).payload(message.as_str());
+
+        let key = key.unwrap_or_default();
+        if !key.is_empty() {
+            record = record.key(key.as_str());
+        }
 
         let status = producer.send(record, Duration::from_secs(0)).await;
         return match status {
@@ -94,7 +94,7 @@ impl Kafka {
             }
             Err((err, message)) => {
                 println!("Send failed: {:?}: {:?}", err, message);
-                Err(anyhow::anyhow!("Send failed: {:?}: {:?}", err, message))
+                Err(err.into())
             }
         };
     }

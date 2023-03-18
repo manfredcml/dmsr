@@ -17,16 +17,24 @@ use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQu
 pub struct PostgresSourceConnector {
     config: PostgresSourceConfig,
     client: Option<Client>,
+    connector_name: String,
+    topic_prefix: String,
 }
 
 #[async_trait]
 impl Connector for PostgresSourceConnector {
     type Config = PostgresSourceConfig;
 
-    fn new(config: &PostgresSourceConfig) -> DMSRResult<Box<Self>> {
+    fn new(
+        connector_name: String,
+        topic_prefix: String,
+        config: &PostgresSourceConfig,
+    ) -> DMSRResult<Box<Self>> {
         Ok(Box::new(PostgresSourceConnector {
             config: config.clone(),
             client: None,
+            connector_name,
+            topic_prefix,
         }))
     }
 
@@ -48,7 +56,7 @@ impl Connector for PostgresSourceConnector {
         Ok(())
     }
 
-    async fn stream(&mut self, kafka: Kafka) -> DMSRResult<()> {
+    async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
         let client = match self.client.as_mut() {
             Some(client) => client,
             None => {
@@ -101,13 +109,10 @@ impl Connector for PostgresSourceConnector {
 
             match event[0] {
                 b'w' => {
-                    let change_events = Self::parse_event(event)?;
+                    let change_events = Self::parse_event(self, event)?;
                     for e in change_events {
-                        // Convert e to String
-                        let e = serde_json::to_string(&e)?;
-                        println!("Sending: {}", e);
-
-                        // q.ingest(e).await?;
+                        let topic = format!("{}-{}", self.topic_prefix, e.table);
+                        kafka.ingest(topic, e, None).await?;
                     }
                 }
                 b'k' => {
@@ -124,7 +129,7 @@ impl Connector for PostgresSourceConnector {
 }
 
 impl PostgresSourceConnector {
-    fn parse_event(event: Bytes) -> DMSRResult<Vec<JSONChangeEvent>> {
+    fn parse_event(&self, event: Bytes) -> DMSRResult<Vec<JSONChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
 
@@ -184,10 +189,15 @@ impl PostgresSourceConnector {
                     payload.insert(name.clone(), value.clone());
                 }
 
+                // Get table
+                let table = format!("{}.{}", c.schema, c.table);
+
                 Some(JSONChangeEvent {
+                    source_connector: self.connector_name.clone(),
                     schema,
                     payload,
                     op: operation,
+                    table,
                 })
             })
             .collect();

@@ -155,14 +155,24 @@ fn parse_config_topic_message(
 
     match payload.connector_type {
         ConnectorKind::PostgresSource => {
-            let kafka = Kafka::new(&config.kafka)?;
+            let mut kafka = Kafka::new(&config.kafka)?;
             let config: PostgresSourceConfig = serde_json::from_value(connector_config)?;
+            let connector_name_clone = connector_name.clone();
             let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
-                let mut connector = PostgresSourceConnector::new(&config).unwrap();
+                let mut connector = PostgresSourceConnector::new(
+                    connector_name_clone,
+                    payload.topic_prefix,
+                    &config,
+                )?;
+                info!("Connecting to Kafka...");
+                kafka.connect().await?;
                 info!("Connecting to Postgres...");
                 connector.connect().await?;
                 info!("Starting stream...");
-                connector.stream(kafka).await?;
+                let result = connector.stream(kafka).await;
+                if let Err(e) = result {
+                    error!("Error streaming {:?}", e);
+                }
                 Ok(())
             });
             let mut active_connectors = active_connectors.lock().unwrap();

@@ -3,8 +3,10 @@ use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct JSONChangeEvent {
+    pub source_connector: String,
     pub schema: Schema,
     pub payload: HashMap<String, serde_json::Value>,
+    pub table: String,
     pub op: Operation,
 }
 

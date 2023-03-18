@@ -6,8 +6,8 @@ pub type DMSRResult<T> = Result<T, DMSRError>;
 
 #[derive(Debug)]
 pub enum DMSRError {
-    MissingValueError(MissingValueError),
-    KafkaError(KafkaError),
+    MissingValueError(String),
+    KafkaError(String),
     StdIoError(std::io::Error),
     SerdeYamlError(serde_yaml::Error),
     SerdeJsonError(serde_json::Error),
@@ -62,13 +62,13 @@ impl From<std::io::Error> for DMSRError {
 
 impl From<KafkaError> for DMSRError {
     fn from(error: KafkaError) -> Self {
-        DMSRError::KafkaError(error)
+        DMSRError::KafkaError(error.to_string())
     }
 }
 
 impl From<MissingValueError> for DMSRError {
     fn from(error: MissingValueError) -> Self {
-        DMSRError::MissingValueError(error)
+        DMSRError::MissingValueError(error.field_name.to_string())
     }
 }
 
