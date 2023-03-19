@@ -7,7 +7,7 @@ pub struct JSONChangeEvent {
     pub schema: Schema,
     pub payload: HashMap<String, serde_json::Value>,
     pub table: String,
-    pub op: Operation,
+    pub op: Operation
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -49,7 +49,6 @@ pub enum DataType {
     Array,
     #[serde(rename = "map")]
     Map,
-    None,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]

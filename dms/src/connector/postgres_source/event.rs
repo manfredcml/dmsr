@@ -1,17 +1,34 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct PostgresEvent {
-    pub schema: String,
-    pub table: String,
-    pub column_names: Vec<String>,
-    pub column_types: Vec<String>,
-    pub column_values: Vec<serde_json::Value>,
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub enum Action {
+    B,
+    I,
+    D,
+    U,
+    C,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct RawPostgresEvent {
-    pub change: Vec<Change>,
+    pub action: Action,
+    pub schema: Option<String>,
+    pub table: Option<String>,
+    pub columns: Option<Vec<Column>>,
+    pub pk: Option<Vec<PrimaryKey>>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Column {
+    pub name: String,
+    pub r#type: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct PrimaryKey {
+    pub name: String,
+    pub r#type: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]

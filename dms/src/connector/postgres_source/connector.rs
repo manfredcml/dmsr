@@ -1,6 +1,6 @@
 use crate::connector::connector::Connector;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
-use crate::connector::postgres_source::event::RawPostgresEvent;
+use crate::connector::postgres_source::event::{Action, RawPostgresEvent};
 use crate::error::generic::{DMSRError, DMSRResult};
 use crate::error::missing_value::MissingValueError;
 use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
@@ -91,7 +91,7 @@ impl Connector for PostgresSourceConnector {
         let lsn = match slot_query_res[0].get("consistent_point") {
             Some(lsn) => lsn,
             None => {
-                return Err(DMSRError::PostgresError("No LSN found".to_string()));
+                return Err(DMSRError::PostgresError("No LSN found".into()));
             }
         };
 
@@ -112,17 +112,18 @@ impl Connector for PostgresSourceConnector {
 
             match event[0] {
                 b'w' => {
-                    let change_events = match self.parse_event(event) {
-                        Ok(change_events) => change_events,
+                    let change_event = match self.parse_event(event) {
+                        Ok(Some(change_event)) => change_event,
+                        Ok(None) => continue,
                         Err(e) => {
                             println!("Error: {:?}", e);
                             continue;
                         }
                     };
-                    for e in change_events {
-                        let topic = format!("{}-{}", self.topic_prefix, e.table);
-                        kafka.ingest(topic, e, None).await?;
-                    }
+                    println!("Parsed event: {:?}", change_event);
+                    let topic = format!("{}-{}", self.topic_prefix, change_event.table);
+                    println!("Topic: {:?}", topic);
+                    kafka.ingest(topic, change_event, None).await?;
                 }
                 b'k' => {
                     Self::keep_alive(event, &mut duplex_stream_pin).await?;
@@ -138,81 +139,69 @@ impl Connector for PostgresSourceConnector {
 }
 
 impl PostgresSourceConnector {
-    fn parse_event(&self, event: Bytes) -> DMSRResult<Vec<JSONChangeEvent>> {
+    fn parse_event(&self, event: Bytes) -> DMSRResult<Option<JSONChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
         println!("Raw: {:?}", s);
 
         let raw_event: RawPostgresEvent = serde_json::from_str(s)?;
-        println!("{:?}", raw_event);
+        if raw_event.action == Action::B || raw_event.action == Action::C {
+            return Ok(None);
+        }
 
-        let change_events: Vec<JSONChangeEvent> = raw_event
-            .change
-            .iter()
-            .filter_map(|c| {
-                // Get operation
-                let operation = match c.kind.as_str() {
-                    "insert" => Operation::Create,
-                    "update" => Operation::Update,
-                    "delete" => Operation::Delete,
-                    _ => return None,
-                };
+        println!("Parsed raw event: {:?}", raw_event);
 
-                // Get schema
-                let column_names = &c.column_names;
-                let column_types = &c.column_types;
-                let fields: Vec<Field> = column_names
-                    .iter()
-                    .zip(column_types.iter())
-                    .filter_map(|(name, ty)| {
-                        let ty: DataType = match ty.as_str() {
-                            "integer" => DataType::Int32,
-                            s if s.starts_with("character varying") => DataType::String,
-                            _ => DataType::None,
-                        };
+        // Get operation
+        let operation = match raw_event.action {
+            Action::I => Operation::Create,
+            Action::U => Operation::Update,
+            Action::D => Operation::Delete,
+            _ => return Ok(None),
+        };
 
-                        if ty == DataType::None {
-                            return None;
-                        }
+        // Get payload
+        let columns = match raw_event.columns {
+            Some(columns) => columns,
+            None => return Ok(None),
+        };
 
-                        Some(Field {
-                            r#type: ty,
-                            optional: false,
-                            field: name.clone(),
-                        })
-                    })
-                    .collect();
+        let mut payload: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut fields: Vec<Field> = vec![];
+        for c in columns {
+            let column_name = c.name.clone();
+            payload.insert(c.name, c.value);
 
-                if fields.len() != c.column_values.len() {
-                    return None;
-                }
+            let data_type: DataType = match c.r#type.as_str() {
+                "integer" => DataType::Int32,
+                s if s.starts_with("character varying") => DataType::String,
+                _ => return Ok(None),
+            };
 
-                let schema = Schema {
-                    r#type: DataType::Struct,
-                    fields,
-                };
+            fields.push(Field {
+                r#type: data_type,
+                optional: false,
+                field: column_name,
+            });
+        }
 
-                // Get payload
-                let column_values = &c.column_values;
-                let mut payload: HashMap<String, serde_json::Value> = HashMap::new();
-                for (name, value) in column_names.iter().zip(column_values.iter()) {
-                    payload.insert(name.clone(), value.clone());
-                }
+        let table = raw_event.table.unwrap_or_default();
+        let schema = raw_event.schema.unwrap_or_default();
+        if table.is_empty() || schema.is_empty() {
+            return Ok(None);
+        }
 
-                // Get table
-                let table = format!("{}.{}", c.schema, c.table);
+        let json_event = JSONChangeEvent {
+            source_connector: self.connector_name.clone(),
+            schema: Schema {
+                r#type: DataType::Struct,
+                fields,
+            },
+            payload,
+            table: format!("{}.{}", schema, table),
+            op: operation,
+        };
 
-                Some(JSONChangeEvent {
-                    source_connector: self.connector_name.clone(),
-                    schema,
-                    payload,
-                    op: operation,
-                    table,
-                })
-            })
-            .collect();
-
-        Ok(change_events)
+        Ok(Some(json_event))
     }
 
     async fn keep_alive(
