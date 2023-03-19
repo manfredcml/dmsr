@@ -1,9 +1,11 @@
 use crate::connector::connector::Connector;
 use crate::connector::postgres_sink::config::PostgresSinkConfig;
 use crate::error::generic::{DMSRError, DMSRResult};
+use crate::event::event::{JSONChangeEvent, Operation};
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
 use rdkafka::consumer::Consumer;
+use rdkafka::Message;
 use tokio_postgres::NoTls;
 
 pub struct PostgresSinkConnector {
@@ -63,19 +65,67 @@ impl Connector for PostgresSinkConnector {
             .iter()
             .map(|table| format!("{}-{}", self.topic_prefix, table))
             .collect();
-        let topics_to_subscribe: Vec<&str> = topics_to_subscribe.iter().map(|s| &**s).collect();
+        let topics_to_subscribe: Vec<&str> =
+            topics_to_subscribe.iter().map(|s| s.as_str()).collect();
         let topics_to_subscribe = topics_to_subscribe.as_slice();
         consumer.subscribe(topics_to_subscribe)?;
 
         loop {
             match consumer.recv().await {
                 Ok(msg) => {
-                    println!("Received message: {:?}", msg);
+                    let payload = msg.payload().unwrap_or_default();
+                    let payload = String::from_utf8(payload.to_vec())?;
+                    let payload: JSONChangeEvent = serde_json::from_str(&payload)?;
+
+                    match payload.op {
+                        Operation::Create => {
+                            self.insert(payload).await?;
+                        }
+                        Operation::Update => {}
+                        Operation::Delete => {}
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error while receiving message: {:?}", e);
                 }
             }
         }
+    }
+}
+
+impl PostgresSinkConnector {
+    async fn insert(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
+        let client = match self.client.as_mut() {
+            Some(client) => client,
+            None => {
+                return Err(DMSRError::MissingValueError(
+                    "Client is not initialized".into(),
+                ))
+            }
+        };
+
+        let table = event.table;
+
+        let columns: Vec<String> = event
+            .schema
+            .fields
+            .iter()
+            .map(|f| f.field.clone())
+            .collect();
+
+        let values: Vec<String> = columns
+            .iter()
+            .filter_map(|c| event.payload.get(c))
+            .map(|v| v.to_string().replace('"', "'"))
+            .collect();
+
+        let columns = columns.join(",");
+        let values = values.join(",");
+
+        let query = format!("INSERT INTO {} ({}) VALUES ({})", table, columns, values);
+
+        client.execute(query.as_str(), &[]).await?;
+
+        Ok(())
     }
 }
