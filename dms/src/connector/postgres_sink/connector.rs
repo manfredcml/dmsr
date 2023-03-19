@@ -81,7 +81,9 @@ impl Connector for PostgresSinkConnector {
                         Operation::Create => {
                             self.insert(payload).await?;
                         }
-                        Operation::Update => {}
+                        Operation::Update => {
+                            self.update(payload).await?;
+                        }
                         Operation::Delete => {}
                     }
                 }
@@ -95,6 +97,41 @@ impl Connector for PostgresSinkConnector {
 
 impl PostgresSinkConnector {
     async fn insert(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
+        let client = match self.client.as_mut() {
+            Some(client) => client,
+            None => {
+                return Err(DMSRError::MissingValueError(
+                    "Client is not initialized".into(),
+                ))
+            }
+        };
+
+        let table = event.table;
+
+        let columns: Vec<String> = event
+            .schema
+            .fields
+            .iter()
+            .map(|f| f.field.clone())
+            .collect();
+
+        let values: Vec<String> = columns
+            .iter()
+            .filter_map(|c| event.payload.get(c))
+            .map(|v| v.to_string().replace('"', "'"))
+            .collect();
+
+        let columns = columns.join(",");
+        let values = values.join(",");
+
+        let query = format!("INSERT INTO {} ({}) VALUES ({})", table, columns, values);
+
+        client.execute(query.as_str(), &[]).await?;
+
+        Ok(())
+    }
+
+    async fn update(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
         let client = match self.client.as_mut() {
             Some(client) => client,
             None => {

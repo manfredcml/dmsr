@@ -132,6 +132,7 @@ impl PostgresSourceConnector {
     fn parse_event(&self, event: Bytes) -> DMSRResult<Vec<JSONChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
+        println!("Raw: {:?}", s);
 
         let raw_event: RawPostgresEvent = serde_json::from_str(s)?;
         println!("{:?}", raw_event);
@@ -220,7 +221,7 @@ impl PostgresSourceConnector {
 
         const SECONDS_FROM_UNIX_EPOCH_TO_2000: u128 = 946684800;
         let since_unix_epoch = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
-        let seconds_from_unix_to_2000 = (SECONDS_FROM_UNIX_EPOCH_TO_2000 * 1000 * 1000) as u128;
+        let seconds_from_unix_to_2000 = SECONDS_FROM_UNIX_EPOCH_TO_2000 * 1000 * 1000;
         let time_since_2000: u64 = (since_unix_epoch - seconds_from_unix_to_2000).try_into()?;
 
         // see here for format details: https://www.postgresql.org/docs/10/protocol-replication.html
