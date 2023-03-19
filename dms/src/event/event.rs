@@ -7,7 +7,8 @@ pub struct JSONChangeEvent {
     pub schema: Schema,
     pub payload: HashMap<String, serde_json::Value>,
     pub table: String,
-    pub op: Operation
+    pub op: Operation,
+    pub pk: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]

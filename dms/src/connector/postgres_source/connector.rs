@@ -190,6 +190,13 @@ impl PostgresSourceConnector {
             return Ok(None);
         }
 
+        let pk: Vec<String> = raw_event
+            .pk
+            .unwrap_or_default()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+
         let json_event = JSONChangeEvent {
             source_connector: self.connector_name.clone(),
             schema: Schema {
@@ -199,6 +206,7 @@ impl PostgresSourceConnector {
             payload,
             table: format!("{}.{}", schema, table),
             op: operation,
+            pk,
         };
 
         Ok(Some(json_event))
