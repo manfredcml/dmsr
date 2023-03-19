@@ -95,7 +95,10 @@ impl Connector for PostgresSourceConnector {
             }
         };
 
-        let query = format!("START_REPLICATION SLOT {} LOGICAL {}", slot_name, lsn);
+        let query = format!(
+            "START_REPLICATION SLOT {} LOGICAL {} (\"include-pk\" 'true', \"format-version\" '2')",
+            slot_name, lsn
+        );
 
         let duplex_stream = client.copy_both_simple::<Bytes>(&query).await?;
 
@@ -109,7 +112,13 @@ impl Connector for PostgresSourceConnector {
 
             match event[0] {
                 b'w' => {
-                    let change_events = Self::parse_event(self, event)?;
+                    let change_events = match self.parse_event(event) {
+                        Ok(change_events) => change_events,
+                        Err(e) => {
+                            println!("Error: {:?}", e);
+                            continue;
+                        }
+                    };
                     for e in change_events {
                         let topic = format!("{}-{}", self.topic_prefix, e.table);
                         kafka.ingest(topic, e, None).await?;
