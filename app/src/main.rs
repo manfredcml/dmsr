@@ -14,6 +14,8 @@ use clap::Parser;
 use dms::connector::config::ConnectorConfig;
 use dms::connector::connector::Connector;
 use dms::connector::kind::ConnectorKind;
+use dms::connector::postgres_sink::config::PostgresSinkConfig;
+use dms::connector::postgres_sink::connector::PostgresSinkConnector;
 use dms::connector::postgres_source::config::PostgresSourceConfig;
 use dms::connector::postgres_source::connector::PostgresSourceConnector;
 use dms::error::generic::{DMSRError, DMSRResult};
@@ -22,14 +24,11 @@ use log::{error, info};
 use rdkafka::consumer::Consumer;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::Message;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
-use dms::connector::postgres_sink::config::PostgresSinkConfig;
-use dms::connector::postgres_sink::connector::PostgresSinkConnector;
 
 #[tokio::main]
 async fn main() -> DMSRResult<()> {
@@ -39,7 +38,7 @@ async fn main() -> DMSRResult<()> {
 
     let config_file = File::open(args.config_path)?;
     let config: AppConfig = serde_yaml::from_reader(config_file)?;
-    println!("App Config: {:?}", config);
+    info!("App Config: {:?}", config);
 
     let kafka = init_kafka(&config).await?;
     let app_state = web::Data::new(AppState {
@@ -132,7 +131,7 @@ async fn subscribe_to_config_topic(config: &AppConfig) -> DMSRResult<()> {
                 }
             }
             Err(e) => {
-                println!("Kafka error: {}", e);
+                error!("Kafka error: {}", e);
             }
         }
     }
@@ -150,8 +149,6 @@ fn parse_config_topic_message(
 
     let payload = String::from_utf8(payload.to_vec())?;
     let payload: ConnectorConfig = serde_json::from_str(&payload)?;
-
-    println!("Payload: {:?}", payload);
 
     let connector_config = payload.config.clone();
 
@@ -184,7 +181,7 @@ fn parse_config_topic_message(
             let mut kafka = Kafka::new(&config.kafka)?;
             let config: PostgresSinkConfig = serde_json::from_value(connector_config)?;
             let connector_name_clone = connector_name.clone();
-                        let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
+            let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
                 let mut connector = PostgresSinkConnector::new(
                     connector_name_clone,
                     payload.topic_prefix,
