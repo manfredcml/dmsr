@@ -6,6 +6,7 @@ use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
 use rdkafka::consumer::Consumer;
 use rdkafka::Message;
+use std::collections::HashSet;
 use tokio_postgres::NoTls;
 
 pub struct PostgresSinkConnector {
@@ -51,6 +52,7 @@ impl Connector for PostgresSinkConnector {
     }
 
     async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
+        println!("Starting stream for connector: {}", self.connector_name);
         let consumer = match &mut kafka.consumer {
             Some(consumer) => consumer,
             None => {
@@ -125,6 +127,7 @@ impl PostgresSinkConnector {
         let values = values.join(",");
 
         let query = format!("INSERT INTO {} ({}) VALUES ({})", table, columns, values);
+        println!("{}", query);
 
         client.execute(query.as_str(), &[]).await?;
 
@@ -156,10 +159,28 @@ impl PostgresSinkConnector {
             .map(|v| v.to_string().replace('"', "'"))
             .collect();
 
-        let columns = columns.join(",");
-        let values = values.join(",");
+        let mut query = format!("UPDATE {} SET ", table);
+        query += &columns
+            .iter()
+            .zip(values.iter())
+            .map(|(c, v)| format!("{} = {}", c, v))
+            .collect::<Vec<String>>()
+            .join(",");
 
-        let query = format!("INSERT INTO {} ({}) VALUES ({})", table, columns, values);
+        query += " WHERE ";
+
+        let pk_set: HashSet<&String> = event.pk.iter().collect();
+        let pk_value = event
+            .payload
+            .iter()
+            .filter(|(k, _)| pk_set.contains(k))
+            .map(|(k, v)| format!("{} = '{}'", k, v))
+            .collect::<Vec<String>>()
+            .join(" AND ");
+
+        query += &pk_value;
+
+        println!("{}", query);
 
         client.execute(query.as_str(), &[]).await?;
 
