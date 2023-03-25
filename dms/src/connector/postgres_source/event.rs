@@ -15,6 +15,7 @@ pub struct RawPostgresEvent {
     pub schema: Option<String>,
     pub table: Option<String>,
     pub columns: Option<Vec<Column>>,
+    pub identity: Option<Vec<Column>>,
     pub pk: Option<Vec<PrimaryKey>>,
 }
 

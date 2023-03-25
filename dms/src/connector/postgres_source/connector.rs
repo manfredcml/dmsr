@@ -1,6 +1,6 @@
 use crate::connector::connector::Connector;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
-use crate::connector::postgres_source::event::{Action, RawPostgresEvent};
+use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
 use crate::error::generic::{DMSRError, DMSRResult};
 use crate::error::missing_value::MissingValueError;
 use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
@@ -142,7 +142,6 @@ impl PostgresSourceConnector {
     fn parse_event(&self, event: Bytes) -> DMSRResult<Option<JSONChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
-        println!("Raw: {:?}", s);
 
         let raw_event: RawPostgresEvent = serde_json::from_str(s)?;
         if raw_event.action == Action::B || raw_event.action == Action::C {
@@ -160,10 +159,12 @@ impl PostgresSourceConnector {
         };
 
         // Get payload
-        let columns = match raw_event.columns {
-            Some(columns) => columns,
-            None => return Ok(None),
-        };
+        let mut columns: Vec<Column> = vec![];
+        if operation == Operation::Create {
+            columns = raw_event.columns.unwrap_or_default();
+        } else {
+            columns = raw_event.identity.unwrap_or_default();
+        }
 
         let mut payload: HashMap<String, serde_json::Value> = HashMap::new();
         let mut fields: Vec<Field> = vec![];
