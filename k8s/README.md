@@ -1,0 +1,1 @@
+This directory provides a set of Kubernetes manifests for testing purpose
