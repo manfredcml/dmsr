@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kafka
-  namespace: kafka
+  namespace: dms
   labels:
     app: kafka
 spec:
@@ -44,7 +44,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: kafka
-  namespace: kafka
+  namespace: dms
   labels:
     app: kafka
 spec:
@@ -59,7 +59,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: kafka-data
-  namespace: kafka
+  namespace: dms
   labels:
     app: kafka
 spec:

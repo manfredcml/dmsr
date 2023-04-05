@@ -1,64 +1,64 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: zookeeper
+  name: mysql
   namespace: dms
   labels:
-    app: zookeeper
+    app: mysql
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: zookeeper
+      app: mysql
   template:
     metadata:
-      name: zookeeper
+      name: mysql
       labels:
-        app: zookeeper
+        app: mysql
     spec:
       containers:
-        - name: zookeeper
-          image: bitnami/zookeeper:latest
+        - name: mysql
+          image: mysql:8
           imagePullPolicy: Always
           ports:
-            - containerPort: 2181
+            - containerPort: 3306
           env:
-            - name: ALLOW_ANONYMOUS_LOGIN
-              value: "yes"
+            - name: MYSQL_ROOT_PASSWORD
+              value: "mysql"
           volumeMounts:
-            - mountPath: /bitnami/zookeeper
-              name: zookeeper-data
+            - mountPath: /var/lib/mysql
+              name: mysql-data
       volumes:
-        - name: zookeeper-data
+        - name: mysql-data
           persistentVolumeClaim:
-            claimName: zookeeper-data
+            claimName: mysql-data
       restartPolicy: Always
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: zookeeper
+  name: mysql
   namespace: dms
   labels:
-    app: zookeeper
+    app: mysql
 spec:
   ports:
-    - name: client
-      port: 2181
-      targetPort: 2181
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
   selector:
-    app: zookeeper
+    app: mysql
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: zookeeper-data
+  name: mysql-data
   namespace: dms
   labels:
-    app: zookeeper
+    app: mysql
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 1Gi
+      storage: 2Gi
