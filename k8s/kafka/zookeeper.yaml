@@ -25,6 +25,13 @@ spec:
           env:
             - name: ALLOW_ANONYMOUS_LOGIN
               value: "yes"
+          volumeMounts:
+            - mountPath: /bitnami/zookeeper
+              name: zookeeper-data
+      volumes:
+        - name: zookeeper-data
+          persistentVolumeClaim:
+            claimName: zookeeper-data
       restartPolicy: Always
 ---
 apiVersion: v1
@@ -41,3 +48,17 @@ spec:
       targetPort: 2181
   selector:
     app: zookeeper
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zookeeper-data
+  namespace: kafka
+  labels:
+    app: zookeeper
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

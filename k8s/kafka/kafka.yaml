@@ -31,6 +31,13 @@ spec:
               value: "PLAINTEXT://:9092"
             - name: KAFKA_CFG_ADVERTISED_LISTENERS
               value: "PLAINTEXT://kafka:9092"
+          volumeMounts:
+            - mountPath: /bitnami/kafka
+              name: kafka-data
+      volumes:
+        - name: kafka-data
+          persistentVolumeClaim:
+            claimName: kafka-data
       restartPolicy: Always
 ---
 apiVersion: v1
@@ -47,3 +54,17 @@ spec:
       protocol: TCP
   selector:
     app: kafka
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-data
+  namespace: kafka
+  labels:
+    app: kafka
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
