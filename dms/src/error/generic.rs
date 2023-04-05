@@ -16,6 +16,13 @@ pub enum DMSRError {
     PostgresError(String),
     SystemTimeError(String),
     TryFromIntError(String),
+    MySQLError(String),
+}
+
+impl From<mysql_async::Error> for DMSRError {
+    fn from(error: mysql_async::Error) -> Self {
+        DMSRError::MySQLError(error.to_string())
+    }
 }
 
 impl From<time::SystemTimeError> for DMSRError {

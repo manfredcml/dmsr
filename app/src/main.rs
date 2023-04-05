@@ -29,6 +29,8 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
+use dms::connector::mysql_source::config::MySQLSourceConfig;
+use dms::connector::mysql_source::connector::MySQLSourceConnector;
 
 #[tokio::main]
 async fn main() -> DMSRResult<()> {
@@ -178,28 +180,52 @@ fn parse_config_topic_message(
             active_connectors.insert(connector_name, handle);
         }
         ConnectorKind::PostgresSink => {
-            let mut kafka = Kafka::new(&config.kafka)?;
-            let config: PostgresSinkConfig = serde_json::from_value(connector_config)?;
-            let connector_name_clone = connector_name.clone();
-            let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
-                let mut connector = PostgresSinkConnector::new(
-                    connector_name_clone,
-                    payload.topic_prefix,
-                    &config,
-                )?;
-                info!("Connecting to Kafka...");
-                kafka.connect().await?;
-                info!("Connecting to Postgres...");
-                connector.connect().await?;
-                info!("Starting stream...");
-                let result = connector.stream(kafka).await;
-                if let Err(e) = result {
-                    error!("Error streaming {:?}", e);
-                }
-                Ok(())
-            });
-            let mut active_connectors = active_connectors.lock().unwrap();
-            active_connectors.insert(connector_name, handle);
+            // let mut kafka = Kafka::new(&config.kafka)?;
+            // let config: PostgresSinkConfig = serde_json::from_value(connector_config)?;
+            // let connector_name_clone = connector_name.clone();
+            // let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
+            //     let mut connector = PostgresSinkConnector::new(
+            //         connector_name_clone,
+            //         payload.topic_prefix,
+            //         &config,
+            //     )?;
+            //     info!("Connecting to Kafka...");
+            //     kafka.connect().await?;
+            //     info!("Connecting to Postgres...");
+            //     connector.connect().await?;
+            //     info!("Starting stream...");
+            //     let result = connector.stream(kafka).await;
+            //     if let Err(e) = result {
+            //         error!("Error streaming {:?}", e);
+            //     }
+            //     Ok(())
+            // });
+            // let mut active_connectors = active_connectors.lock().unwrap();
+            // active_connectors.insert(connector_name, handle);
+        }
+        ConnectorKind::MySQLSource => {
+            // let mut kafka = Kafka::new(&config.kafka)?;
+            // let config: MySQLSourceConfig = serde_json::from_value(connector_config)?;
+            // let connector_name_clone = connector_name.clone();
+            // let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
+            //     let mut connector = MySQLSourceConnector::new(
+            //         connector_name_clone,
+            //         payload.topic_prefix,
+            //         &config,
+            //     )?;
+            //     info!("Connecting to Kafka...");
+            //     kafka.connect().await?;
+            //     info!("Connecting to Postgres...");
+            //     connector.connect().await?;
+            //     info!("Starting stream...");
+            //     let result = connector.stream(kafka).await;
+            //     if let Err(e) = result {
+            //         error!("Error streaming {:?}", e);
+            //     }
+            //     Ok(())
+            // });
+            // let mut active_connectors = active_connectors.lock().unwrap();
+            // active_connectors.insert(connector_name, handle);
         }
     }
 

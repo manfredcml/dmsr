@@ -9,6 +9,9 @@ pub enum ConnectorKind {
 
     #[serde(rename = "postgres_source")]
     PostgresSource,
+
+    #[serde(rename = "mysql_source")]
+    MySQLSource,
 }
 
 impl FromStr for ConnectorKind {
@@ -18,6 +21,7 @@ impl FromStr for ConnectorKind {
         match s {
             "postgres_sink" => Ok(ConnectorKind::PostgresSink),
             "postgres_source" => Ok(ConnectorKind::PostgresSource),
+            "mysql_source" => Ok(ConnectorKind::MySQLSource),
             _ => Err(DMSRError::UnknownConnectorError(s.to_string())),
         }
     }

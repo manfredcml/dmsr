@@ -74,7 +74,7 @@ impl Connector for PostgresSourceConnector {
         );
 
         let slot_query = format!(
-            "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL \"wal2json\"",
+            "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL \"pgoutput\"",
             slot_name
         );
 
