@@ -26,12 +26,15 @@ spec:
             - name: POSTGRES_USER
               value: "postgres"
             - name: PGDATA
-              value: "/var/lib/postgresql/data/pgdata"
+              value: "/var/lib/postgresql/data"
           ports:
             - containerPort: 5432
           volumeMounts:
             - mountPath: /var/lib/postgresql/data
               name: postgres-data
+          args:
+            - "-c"
+            - "wal_level=logical"
       volumes:
         - name: postgres-data
           persistentVolumeClaim:
