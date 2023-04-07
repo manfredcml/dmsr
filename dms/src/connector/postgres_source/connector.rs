@@ -6,9 +6,11 @@ use crate::error::missing_value::MissingValueError;
 use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use bytes::Bytes;
 use futures::{future, ready, Sink, StreamExt};
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::pin::Pin;
 use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -95,51 +97,86 @@ impl Connector for PostgresSourceConnector {
             }
         };
 
-        let query = format!(
-            "START_REPLICATION SLOT {} LOGICAL {} (\"include-pk\" 'true', \"format-version\" '2')",
-            slot_name, lsn
-        );
+        let query = format!("START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" 'all_tables')", slot_name, lsn);
 
-        let duplex_stream = client.copy_both_simple::<Bytes>(&query).await?;
+        let stream = client.copy_both_simple::<Bytes>(&query).await?;
+        let mut stream = Box::pin(stream);
 
-        let mut duplex_stream_pin = Box::pin(duplex_stream);
+        while let Some(event) = stream.next().await {
+            let event = event?;
+            let first_byte = &event[0];
 
-        loop {
-            let event = match duplex_stream_pin.as_mut().next().await {
-                Some(event_res) => event_res,
-                None => break,
-            }?;
-
-            match event[0] {
-                b'w' => {
-                    let change_event = match self.parse_event(event) {
-                        Ok(Some(change_event)) => change_event,
-                        Ok(None) => continue,
-                        Err(e) => {
-                            println!("Error: {:?}", e);
-                            continue;
-                        }
-                    };
-                    println!("Parsed event: {:?}", change_event);
-                    let topic = format!("{}-{}", self.topic_prefix, change_event.table);
-                    println!("Topic: {:?}", topic);
-                    kafka.ingest(topic, change_event, None).await?;
-                }
+            match first_byte {
                 b'k' => {
-                    Self::keep_alive(event, &mut duplex_stream_pin).await?;
+                    self.keep_alive(&event, &mut stream).await?;
                 }
-                _ => {
-                    println!("Not recognized: {:?}", event);
+                b'w' => {
+                    println!("Event: {:?}", event);
+
+                    let mut cursor = Cursor::new(&event);
+
+                    let message_type = cursor.read_u8()?;
+                    let transaction_id = cursor.read_u64::<BigEndian>()?;
+                    let relation_id = cursor.read_u32::<BigEndian>()?;
+
+                    println!("Message type: {:?}", message_type);
+                    println!("Transaction ID: {:?}", transaction_id);
+                    println!("Relation ID: {:?}", relation_id);
+
+                    let tuple_data = &event[cursor.position() as usize..];
+                    println!("Tuple data: {:?}", tuple_data);
+
+
+                    // let tuple_data = &event[cursor.position() as usize..];
+
+                    // let topic = format!("{}-{}", self.topic_prefix, change_event.table);
+                    // println!("Topic: {:?}", topic);
+                    // kafka.ingest(topic, change_event, None).await?;
+                    println!("====================================")
                 }
+                _ => {}
             }
         }
+
+        //
+        // let mut duplex_stream_pin = Box::pin(duplex_stream);
+        //
+        // loop {
+        //     let event = match duplex_stream_pin.as_mut().next().await {
+        //         Some(event_res) => event_res,
+        //         None => break,
+        //     }?;
+        //
+        //     match event[0] {
+        //         b'w' => {
+        //             let change_event = match self.parse_event(event) {
+        //                 Ok(Some(change_event)) => change_event,
+        //                 Ok(None) => continue,
+        //                 Err(e) => {
+        //                     println!("Error: {:?}", e);
+        //                     continue;
+        //                 }
+        //             };
+        //             println!("Parsed event: {:?}", change_event);
+        //             let topic = format!("{}-{}", self.topic_prefix, change_event.table);
+        //             println!("Topic: {:?}", topic);
+        //             kafka.ingest(topic, change_event, None).await?;
+        //         }
+        //         b'k' => {
+        //             Self::keep_alive(event, &mut duplex_stream_pin).await?;
+        //         }
+        //         _ => {
+        //             println!("Not recognized: {:?}", event);
+        //         }
+        //     }
+        // }
 
         Ok(())
     }
 }
 
 impl PostgresSourceConnector {
-    fn parse_event(&self, event: Bytes) -> DMSRResult<Option<JSONChangeEvent>> {
+    fn process_event(&self, event: &Bytes) -> DMSRResult<Option<JSONChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
 
@@ -214,61 +251,38 @@ impl PostgresSourceConnector {
     }
 
     async fn keep_alive(
-        event: Bytes,
-        duplex_stream_pin: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
+        &self,
+        event: &Bytes,
+        stream: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
     ) -> DMSRResult<()> {
-        let last_byte = match event.last() {
-            Some(last_byte) => last_byte,
-            None => return Ok(()),
-        };
-        let timeout_imminent = last_byte == &1;
-        if !timeout_imminent {
-            return Ok(());
+        let last_byte = event.last().unwrap_or(&0);
+        if last_byte != &1 {
+            return Ok(()); // We don't need to send a reply
         }
 
-        const SECONDS_FROM_UNIX_EPOCH_TO_2000: u128 = 946684800;
-        let since_unix_epoch = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
-        let seconds_from_unix_to_2000 = SECONDS_FROM_UNIX_EPOCH_TO_2000 * 1000 * 1000;
-        let time_since_2000: u64 = (since_unix_epoch - seconds_from_unix_to_2000).try_into()?;
+        let now = SystemTime::now();
+        let duration_since_epoch = now.duration_since(UNIX_EPOCH)?;
+        let timestamp_micros = duration_since_epoch.as_secs() * 1_000_000
+            + u64::from(duration_since_epoch.subsec_micros());
 
-        // see here for format details: https://www.postgresql.org/docs/10/protocol-replication.html
-        let mut data_to_send: Vec<u8> = vec![];
-        // Byte1('r'); Identifies the message as a receiver status update.
-        data_to_send.extend_from_slice(&[114]); // "r" in ascii
-                                                // The location of the last WAL byte + 1 received and written to disk in the standby.
-        data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-        // The location of the last WAL byte + 1 flushed to disk in the standby.
-        data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-        // The location of the last WAL byte + 1 applied in the standby.
-        data_to_send.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
-        // The client's system clock at the time of transmission, as microseconds since midnight on 2000-01-01.
-        //0, 0, 0, 0, 0, 0, 0, 0,
-        data_to_send.extend_from_slice(&time_since_2000.to_be_bytes());
-        // Byte1; If 1, the client requests the server to reply to this message immediately. This can be used to ping the server, to test if the connection is still healthy.
-        data_to_send.extend_from_slice(&[1]);
+        // Write the Standby Status Update message header
+        let mut buf = Cursor::new(Vec::new());
+        buf.write_u8(b'r')?;
+        buf.write_i64::<BigEndian>(0)?; // Write your current XLog position here
+        buf.write_i64::<BigEndian>(0)?; // Write your current flush position here
+        buf.write_i64::<BigEndian>(0)?; // Write your current apply position here
+        buf.write_i64::<BigEndian>(timestamp_micros as i64)?; // Write the current timestamp here
+        buf.write_u8(1)?; // 1 if you want to request a reply from the server, 0 otherwise
 
-        let buf = Bytes::from(data_to_send);
+        let msg = buf.into_inner();
+        let msg = Bytes::from(msg);
 
-        let mut next_step = 1;
-        future::poll_fn(|cx| loop {
-            match next_step {
-                1 => {
-                    ready!(duplex_stream_pin.as_mut().poll_ready(cx)).unwrap();
-                }
-                2 => {
-                    duplex_stream_pin.as_mut().start_send(buf.clone()).unwrap();
-                }
-                3 => {
-                    ready!(duplex_stream_pin.as_mut().poll_flush(cx)).unwrap();
-                }
-                4 => {
-                    return Poll::Ready(());
-                }
-                _ => panic!(),
-            }
-            next_step += 1;
+        future::poll_fn(|cx| {
+            ready!(stream.as_mut().poll_ready(cx))?;
+            stream.as_mut().start_send(msg.clone())?;
+            stream.as_mut().poll_flush(cx)
         })
-        .await;
+        .await?;
 
         Ok(())
     }
