@@ -39,6 +39,44 @@ where
     Ok(val)
 }
 
+fn read_columns(num_columns: u16, cursor: &mut Cursor<&[u8]>) -> DMSRResult<Vec<ColumnData>> {
+    let mut columns: Vec<ColumnData> = vec![];
+
+    for _ in 0..num_columns {
+        let col_data_category = parse_u8_into_enum::<ColumnDataCategory>(cursor.read_u8()?)?;
+
+        match col_data_category {
+            ColumnDataCategory::Null => {
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Null,
+                    column_data_length: None,
+                    column_value: None,
+                });
+            }
+            ColumnDataCategory::Unknown => {
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Unknown,
+                    column_data_length: None,
+                    column_value: None,
+                });
+            }
+            ColumnDataCategory::Text => {
+                let col_data_length = cursor.read_u32::<BigEndian>()?;
+                let mut col_data = vec![0; col_data_length as usize];
+                cursor.read_exact(&mut col_data)?;
+                let col_value = String::from_utf8(col_data)?;
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Text,
+                    column_data_length: Some(col_data_length),
+                    column_value: Some(col_value),
+                });
+            }
+        }
+    }
+
+    Ok(columns)
+}
+
 pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     let mut cursor = Cursor::new(event);
 
@@ -97,40 +135,7 @@ pub fn parse_update_event(
     }
 
     let num_columns = cursor.read_u16::<BigEndian>()?;
-
-    let mut columns: Vec<ColumnData> = vec![];
-
-    for _ in 0..num_columns {
-        let col_data_category = parse_u8_into_enum::<ColumnDataCategory>(cursor.read_u8()?)?;
-
-        match col_data_category {
-            ColumnDataCategory::Null => {
-                columns.push(ColumnData {
-                    column_data_category: ColumnDataCategory::Null,
-                    column_data_length: None,
-                    column_value: None,
-                });
-            }
-            ColumnDataCategory::Unknown => {
-                columns.push(ColumnData {
-                    column_data_category: ColumnDataCategory::Unknown,
-                    column_data_length: None,
-                    column_value: None,
-                });
-            }
-            ColumnDataCategory::Text => {
-                let col_data_length = cursor.read_u32::<BigEndian>()?;
-                let mut col_data = vec![0; col_data_length as usize];
-                cursor.read_exact(&mut col_data)?;
-                let col_value = String::from_utf8(col_data)?;
-                columns.push(ColumnData {
-                    column_data_category: ColumnDataCategory::Text,
-                    column_data_length: Some(col_data_length),
-                    column_value: Some(col_value),
-                });
-            }
-        }
-    }
+    let columns = read_columns(num_columns, cursor)?;
 
     let pgoutput = UpdateEvent {
         timestamp,
@@ -233,40 +238,7 @@ pub fn parse_insert_event(
     let tuple_type = parse_u8_into_enum::<TupleType>(cursor.read_u8()?)?;
 
     let num_columns = cursor.read_u16::<BigEndian>()?;
-
-    let mut columns: Vec<ColumnData> = vec![];
-    for _ in 0..num_columns {
-        let col_data_category = parse_u8_into_enum::<ColumnDataCategory>(cursor.read_u8()?)?;
-
-        match col_data_category {
-            ColumnDataCategory::Null => {
-                columns.push(ColumnData {
-                    column_data_category: ColumnDataCategory::Null,
-                    column_data_length: None,
-                    column_value: None,
-                });
-            }
-            ColumnDataCategory::Unknown => {
-                columns.push(ColumnData {
-                    column_data_category: ColumnDataCategory::Unknown,
-                    column_data_length: None,
-                    column_value: None,
-                });
-            }
-            ColumnDataCategory::Text => {
-                let col_data_length = cursor.read_u32::<BigEndian>()?;
-                let mut col_value = vec![0; col_data_length as usize];
-                cursor.read_exact(&mut col_value)?;
-                let col_value = String::from_utf8(col_value)?;
-
-                columns.push(ColumnData {
-                    column_data_category: ColumnDataCategory::Text,
-                    column_data_length: Some(col_data_length),
-                    column_value: Some(col_value),
-                });
-            }
-        }
-    }
+    let columns = read_columns(num_columns, cursor)?;
 
     let pgoutput = InsertEvent {
         timestamp,
