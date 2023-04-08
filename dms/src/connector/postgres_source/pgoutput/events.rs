@@ -5,6 +5,8 @@ use chrono::NaiveDateTime;
 pub enum PgOutputEvent {
     Relation(RelationEvent),
     Insert(InsertEvent),
+    Begin(BeginEvent),
+    Update(UpdateEvent),
 }
 
 #[derive(Debug)]
@@ -19,6 +21,14 @@ pub struct RelationEvent {
 }
 
 #[derive(Debug)]
+pub struct BeginEvent {
+    pub timestamp: NaiveDateTime,
+    pub lsn: u64,
+    pub commit_timestamp: NaiveDateTime,
+    pub tx_xid: u32,
+}
+
+#[derive(Debug)]
 pub struct InsertEvent {
     pub timestamp: NaiveDateTime,
     pub relation_id: u32,
@@ -27,10 +37,14 @@ pub struct InsertEvent {
     pub values: Vec<String>,
 }
 
+#[derive(Debug)]
+pub struct UpdateEvent {}
+
 #[derive(Debug, PartialEq)]
 pub enum MessageType {
     Relation,
     Insert,
+    Begin,
 }
 
 impl MessageType {
@@ -38,6 +52,7 @@ impl MessageType {
         match c {
             'R' => Ok(MessageType::Relation),
             'I' => Ok(MessageType::Insert),
+            'B' => Ok(MessageType::Begin),
             _ => Err(DMSRError::PostgresError("Unknown message type".into())),
         }
     }

@@ -1,5 +1,6 @@
 use crate::connector::postgres_source::pgoutput::events::{
-    InsertEvent, MessageType, PgOutputEvent, RelationColumn, RelationEvent, ReplicationIdentity,
+    BeginEvent, InsertEvent, MessageType, PgOutputEvent, RelationColumn, RelationEvent,
+    ReplicationIdentity,
 };
 use crate::error::generic::{DMSRError, DMSRResult};
 use byteorder::{BigEndian, ReadBytesExt};
@@ -26,6 +27,7 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     cursor.set_position(17);
 
     let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
+    println!("ms_since_2000: {}", ms_since_2000);
     let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
     let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
     let duration = Duration::microseconds(ms_since_2000);
@@ -43,7 +45,35 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
             let pgoutput = parse_insert_event(timestamp, &mut cursor)?;
             Ok(pgoutput)
         }
+        MessageType::Begin => {
+            let pgoutput = parse_begin_event(timestamp, &mut cursor)?;
+            Ok(pgoutput)
+        }
     }
+}
+
+pub fn parse_begin_event(
+    timestamp: NaiveDateTime,
+    cursor: &mut Cursor<&[u8]>,
+) -> DMSRResult<PgOutputEvent> {
+    let lsn = cursor.read_u64::<BigEndian>()?;
+
+    let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
+    let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+    let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
+    let duration = Duration::microseconds(ms_since_2000);
+    println!("ms_since_2000: {}", ms_since_2000);
+    let commit_timestamp = start_date + duration;
+
+    let tx_xid = cursor.read_u32::<BigEndian>()?;
+
+    let pgoutput = BeginEvent {
+        timestamp,
+        lsn,
+        commit_timestamp,
+        tx_xid,
+    };
+    Ok(PgOutputEvent::Begin(pgoutput))
 }
 
 pub fn parse_relation_event(
@@ -127,10 +157,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_begin() {
+        let event = b"w\0\0\0\0\x01XdH\0\0\0\0\x01XdH\0\x02\x9b\xcat\xc8\xfe\xf2B\0\0\0\0\x01Xe\xd0\0\x02\x9b\xcat\xc8\xf7`\0\0\x02\xfa";
+        let event = event as &[u8];
+
+        let pgoutput = parse_pgoutput_event(event);
+        assert!(pgoutput.is_ok());
+
+        let event = match pgoutput.unwrap() {
+            PgOutputEvent::Begin(event) => event,
+            _ => panic!("Expected Relation event"),
+        };
+        let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
+        let duration = Duration::microseconds(734243798449906);
+        let commit_duration = Duration::microseconds(734243798447968);
+        let timestamp = start_date + duration;
+        let commit_timestamp = start_date + commit_duration;
+
+        assert_eq!(event.timestamp, timestamp);
+        assert_eq!(event.lsn, 22570448);
+        assert_eq!(event.commit_timestamp, commit_timestamp);
+        assert_eq!(event.tx_xid, 762);
+    }
+
+    #[test]
     fn test_parse_insert() {
         let event = b"w\0\0\0\0\x01Xa\x80\0\0\0\0\x01Xa\x80\0\x02\x9b\xc9\xf2\xd1\x1c\x94I\0\0@\nN\0\x02t\0\0\0\x012t\0\0\0\x04test";
         let event = event as &[u8];
-        println!("{:?}", event);
 
         let pgoutput = parse_pgoutput_event(event);
         assert!(pgoutput.is_ok());
