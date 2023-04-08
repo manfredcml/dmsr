@@ -1,6 +1,7 @@
 use crate::connector::postgres_source::pgoutput::events::{
     BeginEvent, ColumnData, ColumnDataCategory, CommitEvent, DeleteEvent, InsertEvent, MessageType,
-    PgOutputEvent, RelationColumn, RelationEvent, ReplicationIdentity, TupleType, UpdateEvent,
+    PgOutputEvent, RelationColumn, RelationEvent, ReplicationIdentity, TruncateEvent,
+    TruncateOptionBit, TupleType, UpdateEvent,
 };
 use crate::error::generic::{DMSRError, DMSRResult};
 use byteorder::{BigEndian, ReadBytesExt};
@@ -36,6 +37,7 @@ where
 {
     let val = &[val];
     let val = std::str::from_utf8(val)?;
+    println!("val: {}", val);
     let val = T::from_str(val).map_err(|e| DMSRError::StrumParseError(e.to_string()))?;
     Ok(val)
 }
@@ -114,7 +116,34 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
             let pgoutput = parse_delete_event(timestamp, &mut cursor)?;
             Ok(pgoutput)
         }
+        MessageType::Truncate => {
+            let pgoutput = parse_truncate_event(timestamp, &mut cursor)?;
+            Ok(pgoutput)
+        }
+        MessageType::Origin => Ok(PgOutputEvent::Origin),
     }
+}
+
+pub fn parse_truncate_event(
+    timestamp: NaiveDateTime,
+    cursor: &mut Cursor<&[u8]>,
+) -> DMSRResult<PgOutputEvent> {
+    let num_relations = cursor.read_u32::<BigEndian>()?;
+    let option_bits = TruncateOptionBit::from_u8(cursor.read_u8()?)?;
+    let mut relation_ids: Vec<u32> = vec![];
+    for _ in 0..num_relations {
+        let relation_id = cursor.read_u32::<BigEndian>()?;
+        relation_ids.push(relation_id);
+    }
+
+    let pgoutput = TruncateEvent {
+        timestamp,
+        option_bits,
+        num_relations,
+        relation_ids,
+    };
+
+    Ok(PgOutputEvent::Truncate(pgoutput))
 }
 
 pub fn parse_delete_event(
@@ -287,6 +316,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_origin() {
+        let event = b"w\0\0\0\0\x01X\xc3(\0\0\0\0\x01X\xc3(\0\x02\x9b\xd0ZC\x18\x94O";
+        let event = event as &[u8];
+
+        let pgoutput = parse_pgoutput_event(event);
+        assert!(pgoutput.is_ok());
+
+        let event = match pgoutput.unwrap() {
+            PgOutputEvent::Origin => true,
+            _ => panic!("Expected Origin event"),
+        };
+        assert!(event);
+    }
+
+    #[test]
+    fn test_parse_truncate() {
+        let event =
+            b"w\0\0\0\0\x01X\xc3(\0\0\0\0\x01X\xc3(\0\x02\x9b\xd0ZC\x18\x94T\0\0\0\x01\0\0\0@\n";
+        let event = event as &[u8];
+
+        let pgoutput = parse_pgoutput_event(event);
+        assert!(pgoutput.is_ok());
+
+        let event = match pgoutput.unwrap() {
+            PgOutputEvent::Truncate(event) => event,
+            _ => panic!("Expected Truncate event"),
+        };
+        let timestamp = parse_timestamp(734269123270804);
+        assert_eq!(event.timestamp, timestamp);
+        assert_eq!(event.num_relations, 1);
+        assert_eq!(event.option_bits, TruncateOptionBit::None);
+        assert_eq!(event.relation_ids, vec![16394]);
+    }
+
+    #[test]
     fn test_parse_delete() {
         let event =
             b"w\0\0\0\0\x01Xp`\0\0\0\0\x01Xp`\0\x02\x9b\xd0.(\xeb6D\0\0@\nK\0\x02t\0\0\0\x011n";
@@ -306,10 +370,16 @@ mod tests {
         assert_eq!(event.tuple_type, TupleType::Key);
         assert_eq!(event.num_columns, 2);
         assert_eq!(event.columns.len(), 2);
-        assert_eq!(event.columns[0].column_data_category, ColumnDataCategory::Text);
+        assert_eq!(
+            event.columns[0].column_data_category,
+            ColumnDataCategory::Text
+        );
         assert_eq!(event.columns[0].column_data_length, Some(1));
         assert_eq!(event.columns[0].column_value, Some("1".to_string()));
-        assert_eq!(event.columns[1].column_data_category, ColumnDataCategory::Null);
+        assert_eq!(
+            event.columns[1].column_data_category,
+            ColumnDataCategory::Null
+        );
         assert_eq!(event.columns[1].column_data_length, None);
         assert_eq!(event.columns[1].column_value, None);
     }

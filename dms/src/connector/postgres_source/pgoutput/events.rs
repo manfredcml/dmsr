@@ -10,6 +10,8 @@ pub enum PgOutputEvent {
     Commit(CommitEvent),
     Update(UpdateEvent),
     Delete(DeleteEvent),
+    Truncate(TruncateEvent),
+    Origin,
 }
 
 #[derive(Debug)]
@@ -68,10 +70,38 @@ pub struct DeleteEvent {
 }
 
 #[derive(Debug)]
+pub struct TruncateEvent {
+    pub timestamp: NaiveDateTime,
+    pub num_relations: u32,
+    pub option_bits: TruncateOptionBit,
+    pub relation_ids: Vec<u32>,
+}
+
+#[derive(Debug)]
 pub struct ColumnData {
     pub column_data_category: ColumnDataCategory,
     pub column_data_length: Option<u32>,
     pub column_value: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TruncateOptionBit {
+    None,
+    Cascade,
+    RestartIdentity,
+}
+
+impl TruncateOptionBit {
+    pub fn from_u8(value: u8) -> DMSRResult<Self> {
+        match value {
+            0 => Ok(TruncateOptionBit::None),
+            1 => Ok(TruncateOptionBit::Cascade),
+            2 => Ok(TruncateOptionBit::RestartIdentity),
+            _ => Err(DMSRError::PostgresError(
+                "Unknown truncate option bit".into(),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, EnumString, EnumVariantNames)]
@@ -108,6 +138,10 @@ pub enum MessageType {
     Update,
     #[strum(serialize = "D")]
     Delete,
+    #[strum(serialize = "T")]
+    Truncate,
+    #[strum(serialize = "O")]
+    Origin,
 }
 
 #[derive(Debug, PartialEq, EnumString, EnumVariantNames)]
