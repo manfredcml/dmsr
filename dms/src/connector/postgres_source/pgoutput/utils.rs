@@ -21,13 +21,11 @@ fn read_c_string(cursor: &mut Cursor<&[u8]>) -> DMSRResult<String> {
 
 pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     let mut cursor = Cursor::new(event);
-    cursor.read_u8()?;
 
-    let lsn = cursor.read_u64::<BigEndian>()?;
-    let lsn_end = cursor.read_u64::<BigEndian>()?;
+    // Skip the 'w' identifier and the lsn info (which will be in the event body)
+    cursor.set_position(17);
 
     let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
-    println!("ms_since_2000: {}", ms_since_2000);
     let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
     let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
     let duration = Duration::microseconds(ms_since_2000);
@@ -38,18 +36,17 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
 
     match message_type {
         MessageType::Relation => {
-            let pgoutput = parse_relation_event(lsn, timestamp, &mut cursor)?;
+            let pgoutput = parse_relation_event(timestamp, &mut cursor)?;
             Ok(pgoutput)
         }
         MessageType::Insert => {
-            let pgoutput = parse_insert_event(lsn, timestamp, &mut cursor)?;
+            let pgoutput = parse_insert_event(timestamp, &mut cursor)?;
             Ok(pgoutput)
         }
     }
 }
 
 pub fn parse_relation_event(
-    lsn: u64,
     timestamp: NaiveDateTime,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
@@ -80,7 +77,6 @@ pub fn parse_relation_event(
     }
 
     let pgoutput = RelationEvent {
-        lsn,
         timestamp,
         namespace_oid,
         schema_name,
@@ -94,7 +90,6 @@ pub fn parse_relation_event(
 }
 
 pub fn parse_insert_event(
-    lsn: u64,
     timestamp: NaiveDateTime,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
@@ -113,7 +108,6 @@ pub fn parse_insert_event(
     }
 
     let pgoutput = InsertEvent {
-        lsn,
         timestamp,
         num_columns,
         values,
@@ -137,8 +131,6 @@ mod tests {
             PgOutputEvent::Insert(event) => event,
             _ => panic!("Expected Relation event"),
         };
-        assert_eq!(event.lsn, 22569344);
-
         let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
         let duration = Duration::microseconds(734241617943700);
@@ -166,8 +158,6 @@ mod tests {
         };
 
         println!("PgOutput: {:?}", pgoutput);
-        assert_eq!(pgoutput.lsn, 0);
-
         let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
         let duration = Duration::microseconds(734186937094303);

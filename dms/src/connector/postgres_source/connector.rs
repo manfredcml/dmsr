@@ -113,19 +113,8 @@ impl Connector for PostgresSourceConnector {
                 b'w' => {
                     println!("Event: {:?}", event);
 
-                    let mut cursor = Cursor::new(&event);
-
-                    let message_type = cursor.read_u8()?;
-                    let transaction_id = cursor.read_u64::<BigEndian>()?;
-                    let relation_id = cursor.read_u32::<BigEndian>()?;
-
-                    println!("Message type: {:?}", message_type);
-                    println!("Transaction ID: {:?}", transaction_id);
-                    println!("Relation ID: {:?}", relation_id);
-
-                    let tuple_data = &event[cursor.position() as usize..];
-                    println!("Tuple data: {:?}", tuple_data);
-
+                    let event = event.as_ref();
+                    println!("Bytes: {:?}", event);
 
                     // let tuple_data = &event[cursor.position() as usize..];
 
