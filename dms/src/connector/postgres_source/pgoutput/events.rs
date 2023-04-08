@@ -1,3 +1,4 @@
+use chrono::NaiveDateTime;
 use crate::error::generic::{DMSRError, DMSRResult};
 
 #[derive(Debug)]
@@ -9,7 +10,7 @@ pub enum PgOutputEvent {
 #[derive(Debug)]
 pub struct RelationEvent {
     pub lsn: u64,
-    pub timestamp: u128,
+    pub timestamp: NaiveDateTime,
     pub namespace_oid: u32,
     pub schema_name: String,
     pub table_name: String,
@@ -21,7 +22,7 @@ pub struct RelationEvent {
 #[derive(Debug)]
 pub struct InsertEvent {
     pub lsn: u64,
-    pub timestamp: u128,
+    pub timestamp: NaiveDateTime,
     pub num_columns: u16,
     pub values: Vec<String>,
 }

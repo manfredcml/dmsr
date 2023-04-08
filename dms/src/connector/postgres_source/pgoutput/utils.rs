@@ -3,6 +3,7 @@ use crate::connector::postgres_source::pgoutput::events::{
 };
 use crate::error::generic::{DMSRError, DMSRResult};
 use byteorder::{BigEndian, ReadBytesExt};
+use chrono::{Duration, NaiveDate, NaiveDateTime};
 use std::io::{Cursor, Read};
 
 fn read_c_string(cursor: &mut Cursor<&[u8]>) -> DMSRResult<String> {
@@ -22,13 +23,15 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     let mut cursor = Cursor::new(event);
     cursor.read_u8()?;
 
-    let mut lsn = [0u8; 8];
-    cursor.read_exact(&mut lsn)?;
-    let lsn = u64::from_be_bytes(lsn);
+    let lsn = cursor.read_u64::<BigEndian>()?;
+    let lsn_end = cursor.read_u64::<BigEndian>()?;
 
-    let mut timestamp = [0u8; 16];
-    cursor.read_exact(&mut timestamp)?;
-    let timestamp = u128::from_be_bytes(timestamp);
+    let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
+    println!("ms_since_2000: {}", ms_since_2000);
+    let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+    let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
+    let duration = Duration::microseconds(ms_since_2000);
+    let timestamp = start_date + duration;
 
     let message_type = cursor.read_u8()?;
     let message_type = MessageType::from_char(message_type as char)?;
@@ -47,7 +50,7 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
 
 pub fn parse_relation_event(
     lsn: u64,
-    timestamp: u128,
+    timestamp: NaiveDateTime,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
     let namespace_oid = cursor.read_u32::<BigEndian>()?;
@@ -92,7 +95,7 @@ pub fn parse_relation_event(
 
 pub fn parse_insert_event(
     lsn: u64,
-    timestamp: u128,
+    timestamp: NaiveDateTime,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
     let sth = cursor.read_u8()?;
@@ -123,8 +126,9 @@ mod tests {
 
     #[test]
     fn test_parse_insert() {
-        let event = b"w\0\0\0\0\x01V\\\xb0\0\0\0\0\x01V\\\xb0\0\x02\x9b\xbd7\x95\x91\x1dI\0\0@\x04N\0\x02t\0\0\0\x0214t\0\0\0\x04test";
+        let event = b"w\0\0\0\0\x01Xa\x80\0\0\0\0\x01Xa\x80\0\x02\x9b\xc9\xf2\xd1\x1c\x94I\0\0@\nN\0\x02t\0\0\0\x012t\0\0\0\x04test";
         let event = event as &[u8];
+        println!("{:?}", event);
 
         let pgoutput = parse_pgoutput_event(event);
         assert!(pgoutput.is_ok());
@@ -133,11 +137,17 @@ mod tests {
             PgOutputEvent::Insert(event) => event,
             _ => panic!("Expected Relation event"),
         };
-        assert_eq!(event.lsn, 22437040);
-        assert_eq!(event.timestamp, 413890334652318344927351069);
+        assert_eq!(event.lsn, 22569344);
+
+        let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
+        let duration = Duration::microseconds(734241617943700);
+        let timestamp = start_date + duration;
+
+        assert_eq!(event.timestamp, timestamp);
         assert_eq!(event.num_columns, 2);
         assert_eq!(event.values.len(), 2);
-        assert_eq!(event.values[0], "14");
+        assert_eq!(event.values[0], "2");
         assert_eq!(event.values[1], "test");
     }
 
@@ -157,7 +167,13 @@ mod tests {
 
         println!("PgOutput: {:?}", pgoutput);
         assert_eq!(pgoutput.lsn, 0);
-        assert_eq!(pgoutput.timestamp, 734186937094303);
+
+        let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
+        let duration = Duration::microseconds(734186937094303);
+        let timestamp = start_date + duration;
+        assert_eq!(pgoutput.timestamp, timestamp);
+
         assert_eq!(pgoutput.namespace_oid, 16388);
         assert_eq!(pgoutput.schema_name, "public");
         assert_eq!(pgoutput.table_name, "test_tbl");
