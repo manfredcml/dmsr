@@ -23,6 +23,8 @@ mysql_async = "0.31.3"
 mysql_common = "0.29.2"
 byteorder = "1.4.3"
 chrono = "0.4.24"
+strum = "0.24.1"
+strum_macros = "0.24.1"
 
 [dependencies.tokio-postgres]
 git = "https://github.com/MaterializeInc/rust-postgres"

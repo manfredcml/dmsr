@@ -1,2 +1,2 @@
-mod events;
-mod utils;
+pub mod events;
+pub mod utils;

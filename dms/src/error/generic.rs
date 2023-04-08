@@ -17,6 +17,14 @@ pub enum DMSRError {
     SystemTimeError(String),
     TryFromIntError(String),
     MySQLError(String),
+    UnimplementedError(String),
+    StrumParseError(String),
+}
+
+impl From<strum::ParseError> for DMSRError {
+    fn from(error: strum::ParseError) -> Self {
+        DMSRError::StrumParseError(error.to_string())
+    }
 }
 
 impl From<mysql_async::Error> for DMSRError {

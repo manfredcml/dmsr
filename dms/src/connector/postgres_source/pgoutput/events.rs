@@ -1,5 +1,6 @@
 use crate::error::generic::{DMSRError, DMSRResult};
 use chrono::NaiveDateTime;
+use strum_macros::{EnumString, EnumVariantNames};
 
 #[derive(Debug)]
 pub enum PgOutputEvent {
@@ -7,6 +8,7 @@ pub enum PgOutputEvent {
     Insert(InsertEvent),
     Begin(BeginEvent),
     Commit(CommitEvent),
+    Update(UpdateEvent),
 }
 
 #[derive(Debug)]
@@ -41,48 +43,65 @@ pub struct CommitEvent {
 pub struct InsertEvent {
     pub timestamp: NaiveDateTime,
     pub relation_id: u32,
-    pub tuple_type: char,
+    pub tuple_type: TupleType,
     pub num_columns: u16,
-    pub values: Vec<String>,
+    pub columns: Vec<ColumnData>,
 }
 
 #[derive(Debug)]
-pub struct UpdateEvent {}
+pub struct UpdateEvent {
+    pub timestamp: NaiveDateTime,
+    pub relation_id: u32,
+    pub tuple_type: TupleType,
+    pub num_columns: u16,
+    pub columns: Vec<ColumnData>,
+}
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+pub struct ColumnData {
+    pub column_data_category: ColumnDataCategory,
+    pub column_data_length: Option<u32>,
+    pub column_value: Option<String>,
+}
+
+#[derive(Debug, PartialEq, EnumString, EnumVariantNames)]
+pub enum TupleType {
+    #[strum(serialize = "O")]
+    Old,
+    #[strum(serialize = "K")]
+    Key,
+    #[strum(serialize = "N")]
+    New,
+}
+
+#[derive(Debug, PartialEq, EnumString, EnumVariantNames)]
+pub enum ColumnDataCategory {
+    #[strum(serialize = "n")]
+    Null,
+    #[strum(serialize = "u")]
+    Unknown,
+    #[strum(serialize = "t")]
+    Text,
+}
+
+#[derive(Debug, PartialEq, EnumString, EnumVariantNames)]
 pub enum MessageType {
+    #[strum(serialize = "R")]
     Relation,
+    #[strum(serialize = "I")]
     Insert,
+    #[strum(serialize = "B")]
     Begin,
-    Commit
+    #[strum(serialize = "C")]
+    Commit,
+    #[strum(serialize = "U")]
+    Update,
 }
 
-impl MessageType {
-    pub fn from_char(c: char) -> DMSRResult<Self> {
-        match c {
-            'R' => Ok(MessageType::Relation),
-            'I' => Ok(MessageType::Insert),
-            'B' => Ok(MessageType::Begin),
-            'C' => Ok(MessageType::Commit),
-            _ => Err(DMSRError::PostgresError("Unknown message type".into())),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, EnumString, EnumVariantNames)]
 pub enum ReplicationIdentity {
+    #[strum(serialize = "d")]
     Default,
-}
-
-impl ReplicationIdentity {
-    pub fn from_char(c: char) -> DMSRResult<Self> {
-        match c {
-            'd' => Ok(ReplicationIdentity::Default),
-            _ => Err(DMSRError::PostgresError(
-                "Unknown replication identity".into(),
-            )),
-        }
-    }
 }
 
 #[derive(Debug)]

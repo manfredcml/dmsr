@@ -1,11 +1,12 @@
 use crate::connector::postgres_source::pgoutput::events::{
-    BeginEvent, CommitEvent, InsertEvent, MessageType, PgOutputEvent, RelationColumn,
-    RelationEvent, ReplicationIdentity,
+    BeginEvent, ColumnData, ColumnDataCategory, CommitEvent, InsertEvent, MessageType,
+    PgOutputEvent, RelationColumn, RelationEvent, ReplicationIdentity, TupleType, UpdateEvent,
 };
 use crate::error::generic::{DMSRError, DMSRResult};
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use std::io::{Cursor, Read};
+use std::str::FromStr;
 
 fn read_c_string(cursor: &mut Cursor<&[u8]>) -> DMSRResult<String> {
     let mut buf = Vec::new();
@@ -33,8 +34,9 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     let duration = Duration::microseconds(ms_since_2000);
     let timestamp = start_date + duration;
 
-    let message_type = cursor.read_u8()?;
-    let message_type = MessageType::from_char(message_type as char)?;
+    let message_type = &[cursor.read_u8()?];
+    let message_type = std::str::from_utf8(message_type)?;
+    let message_type = MessageType::from_str(message_type)?;
 
     match message_type {
         MessageType::Relation => {
@@ -53,7 +55,83 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
             let pgoutput = parse_commit_event(timestamp, &mut cursor)?;
             Ok(pgoutput)
         }
+        MessageType::Update => {
+            let pgoutput = parse_update_event(timestamp, &mut cursor)?;
+            Ok(pgoutput)
+        }
     }
+}
+
+pub fn parse_update_event(
+    timestamp: NaiveDateTime,
+    cursor: &mut Cursor<&[u8]>,
+) -> DMSRResult<PgOutputEvent> {
+    let relation_id = cursor.read_u32::<BigEndian>()?;
+
+    let tuple_type = &[cursor.read_u8()?];
+    let tuple_type = std::str::from_utf8(tuple_type)?;
+    let tuple_type = TupleType::from_str(tuple_type)?;
+
+    match tuple_type {
+        TupleType::Key => {
+            return Err(DMSRError::UnimplementedError(
+                "Update event with key tuple".to_string(),
+            ));
+        }
+        TupleType::Old => {
+            return Err(DMSRError::UnimplementedError(
+                "Update event with old tuple".to_string(),
+            ));
+        }
+        TupleType::New => {}
+    }
+
+    let num_columns = cursor.read_u16::<BigEndian>()?;
+
+    let mut columns: Vec<ColumnData> = vec![];
+
+    for _ in 0..num_columns {
+        let col_data_category = &[cursor.read_u8()?];
+        let col_data_category = std::str::from_utf8(col_data_category)?;
+        let col_data_category = ColumnDataCategory::from_str(col_data_category)?;
+
+        match col_data_category {
+            ColumnDataCategory::Null => {
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Null,
+                    column_data_length: None,
+                    column_value: None,
+                });
+            }
+            ColumnDataCategory::Unknown => {
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Unknown,
+                    column_data_length: None,
+                    column_value: None,
+                });
+            }
+            ColumnDataCategory::Text => {
+                let col_data_length = cursor.read_u32::<BigEndian>()?;
+                let mut col_data = vec![0; col_data_length as usize];
+                cursor.read_exact(&mut col_data)?;
+                let col_value = String::from_utf8(col_data)?;
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Text,
+                    column_data_length: Some(col_data_length),
+                    column_value: Some(col_value),
+                });
+            }
+        }
+    }
+
+    let pgoutput = UpdateEvent {
+        timestamp,
+        relation_id,
+        tuple_type,
+        num_columns,
+        columns,
+    };
+    Ok(PgOutputEvent::Update(pgoutput))
 }
 
 pub fn parse_commit_event(
@@ -114,8 +192,9 @@ pub fn parse_relation_event(
     let schema_name = read_c_string(cursor)?;
     let table_name = read_c_string(cursor)?;
 
-    let repl_identity = cursor.read_u8()?;
-    let repl_identity = ReplicationIdentity::from_char(repl_identity as char)?;
+    let repl_identity = &[cursor.read_u8()?];
+    let repl_identity = std::str::from_utf8(repl_identity)?;
+    let repl_identity = ReplicationIdentity::from_str(repl_identity)?;
 
     let num_columns = cursor.read_u16::<BigEndian>()?;
 
@@ -153,23 +232,47 @@ pub fn parse_insert_event(
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
     let relation_id = cursor.read_u32::<BigEndian>()?;
-    let tuple_type = cursor.read_u8()? as char;
+
+    let tuple_type = &[cursor.read_u8()?];
+    let tuple_type = std::str::from_utf8(tuple_type)?;
+    let tuple_type = TupleType::from_str(tuple_type)?;
+
     let num_columns = cursor.read_u16::<BigEndian>()?;
 
-    let mut values: Vec<String> = vec![];
+    let mut columns: Vec<ColumnData> = vec![];
     for _ in 0..num_columns {
-        // "n" for null, "t" for text, "u" for unknown
-        let data_category = cursor.read_u8()? as char;
-        if data_category == 'n' || data_category == 'u' {
-            values.push("NULL".to_string());
-            continue;
-        }
+        let col_data_category = &[cursor.read_u8()?];
+        let col_data_category = std::str::from_utf8(col_data_category)?;
+        let col_data_category = ColumnDataCategory::from_str(col_data_category)?;
 
-        let data_length = cursor.read_u32::<BigEndian>()?;
-        let mut data = vec![0; data_length as usize];
-        cursor.read_exact(&mut data)?;
-        let data = String::from_utf8(data)?;
-        values.push(data);
+        match col_data_category {
+            ColumnDataCategory::Null => {
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Null,
+                    column_data_length: None,
+                    column_value: None,
+                });
+            }
+            ColumnDataCategory::Unknown => {
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Unknown,
+                    column_data_length: None,
+                    column_value: None,
+                });
+            }
+            ColumnDataCategory::Text => {
+                let col_data_length = cursor.read_u32::<BigEndian>()?;
+                let mut col_value = vec![0; col_data_length as usize];
+                cursor.read_exact(&mut col_value)?;
+                let col_value = String::from_utf8(col_value)?;
+
+                columns.push(ColumnData {
+                    column_data_category: ColumnDataCategory::Text,
+                    column_data_length: Some(col_data_length),
+                    column_value: Some(col_value),
+                });
+            }
+        }
     }
 
     let pgoutput = InsertEvent {
@@ -177,11 +280,12 @@ pub fn parse_insert_event(
         relation_id,
         tuple_type,
         num_columns,
-        values,
+        columns,
     };
     Ok(PgOutputEvent::Insert(pgoutput))
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -255,11 +359,11 @@ mod tests {
 
         assert_eq!(event.timestamp, timestamp);
         assert_eq!(event.relation_id, 16394);
-        assert_eq!(event.tuple_type, 'N');
+        assert_eq!(event.tuple_type, TupleType::New);
         assert_eq!(event.num_columns, 2);
-        assert_eq!(event.values.len(), 2);
-        assert_eq!(event.values[0], "2");
-        assert_eq!(event.values[1], "test");
+        assert_eq!(event.columns.len(), 2);
+        assert_eq!(event.columns[0].column_value, Some("2".to_string()));
+        assert_eq!(event.columns[1].column_value, Some("test".to_string()));
     }
 
     #[test]
