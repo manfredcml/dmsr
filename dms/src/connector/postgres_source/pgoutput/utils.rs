@@ -78,9 +78,9 @@ pub fn parse_relation_event(
 
     let pgoutput = RelationEvent {
         timestamp,
-        namespace_oid,
-        schema_name,
-        table_name,
+        relation_id: namespace_oid,
+        namespace: schema_name,
+        relation_name: table_name,
         repl_identity,
         num_columns,
         columns,
@@ -93,15 +93,21 @@ pub fn parse_insert_event(
     timestamp: NaiveDateTime,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
-    let sth = cursor.read_u8()?;
     let relation_id = cursor.read_u32::<BigEndian>()?;
+    let tuple_type = cursor.read_u8()? as char;
     let num_columns = cursor.read_u16::<BigEndian>()?;
 
     let mut values: Vec<String> = vec![];
     for _ in 0..num_columns {
-        let data_type = cursor.read_u8()? as char;
+        // "n" for null, "t" for text, "u" for unknown
+        let data_category = cursor.read_u8()? as char;
+        if data_category == 'n' || data_category == 'u' {
+            values.push("NULL".to_string());
+            continue;
+        }
+
         let data_length = cursor.read_u32::<BigEndian>()?;
-        let mut data = vec![0u8; data_length as usize];
+        let mut data = vec![0; data_length as usize];
         cursor.read_exact(&mut data)?;
         let data = String::from_utf8(data)?;
         values.push(data);
@@ -109,6 +115,8 @@ pub fn parse_insert_event(
 
     let pgoutput = InsertEvent {
         timestamp,
+        relation_id,
+        tuple_type,
         num_columns,
         values,
     };
@@ -137,6 +145,8 @@ mod tests {
         let timestamp = start_date + duration;
 
         assert_eq!(event.timestamp, timestamp);
+        assert_eq!(event.relation_id, 16394);
+        assert_eq!(event.tuple_type, 'N');
         assert_eq!(event.num_columns, 2);
         assert_eq!(event.values.len(), 2);
         assert_eq!(event.values[0], "2");
@@ -164,9 +174,9 @@ mod tests {
         let timestamp = start_date + duration;
         assert_eq!(pgoutput.timestamp, timestamp);
 
-        assert_eq!(pgoutput.namespace_oid, 16388);
-        assert_eq!(pgoutput.schema_name, "public");
-        assert_eq!(pgoutput.table_name, "test_tbl");
+        assert_eq!(pgoutput.relation_id, 16388);
+        assert_eq!(pgoutput.namespace, "public");
+        assert_eq!(pgoutput.relation_name, "test_tbl");
         assert_eq!(pgoutput.repl_identity, ReplicationIdentity::Default);
         assert_eq!(pgoutput.num_columns, 2);
         assert_eq!(pgoutput.columns.len(), 2);

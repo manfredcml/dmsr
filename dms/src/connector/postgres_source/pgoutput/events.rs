@@ -10,9 +10,9 @@ pub enum PgOutputEvent {
 #[derive(Debug)]
 pub struct RelationEvent {
     pub timestamp: NaiveDateTime,
-    pub namespace_oid: u32,
-    pub schema_name: String,
-    pub table_name: String,
+    pub relation_id: u32,
+    pub namespace: String,
+    pub relation_name: String,
     pub repl_identity: ReplicationIdentity,
     pub num_columns: u16,
     pub columns: Vec<RelationColumn>,
@@ -21,6 +21,8 @@ pub struct RelationEvent {
 #[derive(Debug)]
 pub struct InsertEvent {
     pub timestamp: NaiveDateTime,
+    pub relation_id: u32,
+    pub tuple_type: char,
     pub num_columns: u16,
     pub values: Vec<String>,
 }
