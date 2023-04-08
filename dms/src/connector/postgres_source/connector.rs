@@ -1,6 +1,8 @@
 use crate::connector::connector::Connector;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
 use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
+use crate::connector::postgres_source::pgoutput::events::PgOutputEvent;
+use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
 use crate::error::generic::{DMSRError, DMSRResult};
 use crate::error::missing_value::MissingValueError;
 use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
@@ -12,7 +14,6 @@ use futures::{future, ready, Sink, StreamExt};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::pin::Pin;
-use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
 
@@ -108,57 +109,42 @@ impl Connector for PostgresSourceConnector {
 
             match first_byte {
                 b'k' => {
-                    self.keep_alive(&event, &mut stream).await?;
+                    keep_alive(&event, &mut stream).await?;
                 }
                 b'w' => {
-                    println!("Event: {:?}", event);
-
                     let event = event.as_ref();
-                    println!("Bytes: {:?}", event);
+                    let pg_output_event = parse_pgoutput_event(event)?;
 
-                    // let tuple_data = &event[cursor.position() as usize..];
+                    match pg_output_event {
+                        PgOutputEvent::Begin(event) => {
+                            println!("Begin: {:?}", event);
+                        }
+                        PgOutputEvent::Commit(event) => {
+                            println!("Commit: {:?}", event);
+                        }
+                        PgOutputEvent::Relation(event) => {
+                            println!("Relation: {:?}", event);
+                        }
+                        PgOutputEvent::Insert(event) => {
+                            println!("Insert: {:?}", event);
+                        }
+                        PgOutputEvent::Update(event) => {
+                            println!("Update: {:?}", event);
+                        }
+                        PgOutputEvent::Delete(event) => {
+                            println!("Delete: {:?}", event);
+                        }
+                        PgOutputEvent::Truncate(event) => {
+                            println!("Truncate: {:?}", event);
+                        }
+                        PgOutputEvent::Origin => {}
+                    }
 
-                    // let topic = format!("{}-{}", self.topic_prefix, change_event.table);
-                    // println!("Topic: {:?}", topic);
-                    // kafka.ingest(topic, change_event, None).await?;
                     println!("====================================")
                 }
                 _ => {}
             }
         }
-
-        //
-        // let mut duplex_stream_pin = Box::pin(duplex_stream);
-        //
-        // loop {
-        //     let event = match duplex_stream_pin.as_mut().next().await {
-        //         Some(event_res) => event_res,
-        //         None => break,
-        //     }?;
-        //
-        //     match event[0] {
-        //         b'w' => {
-        //             let change_event = match self.parse_event(event) {
-        //                 Ok(Some(change_event)) => change_event,
-        //                 Ok(None) => continue,
-        //                 Err(e) => {
-        //                     println!("Error: {:?}", e);
-        //                     continue;
-        //                 }
-        //             };
-        //             println!("Parsed event: {:?}", change_event);
-        //             let topic = format!("{}-{}", self.topic_prefix, change_event.table);
-        //             println!("Topic: {:?}", topic);
-        //             kafka.ingest(topic, change_event, None).await?;
-        //         }
-        //         b'k' => {
-        //             Self::keep_alive(event, &mut duplex_stream_pin).await?;
-        //         }
-        //         _ => {
-        //             println!("Not recognized: {:?}", event);
-        //         }
-        //     }
-        // }
 
         Ok(())
     }
@@ -237,42 +223,5 @@ impl PostgresSourceConnector {
         };
 
         Ok(Some(json_event))
-    }
-
-    async fn keep_alive(
-        &self,
-        event: &Bytes,
-        stream: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
-    ) -> DMSRResult<()> {
-        let last_byte = event.last().unwrap_or(&0);
-        if last_byte != &1 {
-            return Ok(()); // We don't need to send a reply
-        }
-
-        let now = SystemTime::now();
-        let duration_since_epoch = now.duration_since(UNIX_EPOCH)?;
-        let timestamp_micros = duration_since_epoch.as_secs() * 1_000_000
-            + u64::from(duration_since_epoch.subsec_micros());
-
-        // Write the Standby Status Update message header
-        let mut buf = Cursor::new(Vec::new());
-        buf.write_u8(b'r')?;
-        buf.write_i64::<BigEndian>(0)?; // Write your current XLog position here
-        buf.write_i64::<BigEndian>(0)?; // Write your current flush position here
-        buf.write_i64::<BigEndian>(0)?; // Write your current apply position here
-        buf.write_i64::<BigEndian>(timestamp_micros as i64)?; // Write the current timestamp here
-        buf.write_u8(1)?; // 1 if you want to request a reply from the server, 0 otherwise
-
-        let msg = buf.into_inner();
-        let msg = Bytes::from(msg);
-
-        future::poll_fn(|cx| {
-            ready!(stream.as_mut().poll_ready(cx))?;
-            stream.as_mut().start_send(msg.clone())?;
-            stream.as_mut().poll_flush(cx)
-        })
-        .await?;
-
-        Ok(())
     }
 }

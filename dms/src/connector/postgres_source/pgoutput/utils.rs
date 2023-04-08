@@ -4,10 +4,15 @@ use crate::connector::postgres_source::pgoutput::events::{
     TruncateOptionBit, TupleType, UpdateEvent,
 };
 use crate::error::generic::{DMSRError, DMSRResult};
-use byteorder::{BigEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use bytes::Bytes;
 use chrono::{Duration, NaiveDate, NaiveDateTime};
+use futures::{future, ready, Sink};
 use std::io::{Cursor, Read};
+use std::pin::Pin;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio_postgres::CopyBothDuplex;
 
 fn read_c_string(cursor: &mut Cursor<&[u8]>) -> DMSRResult<String> {
     let mut buf = Vec::new();
@@ -23,7 +28,6 @@ fn read_c_string(cursor: &mut Cursor<&[u8]>) -> DMSRResult<String> {
 }
 
 fn parse_timestamp(ms_since_2000: i64) -> NaiveDateTime {
-    println!("ms_since_2000: {}", ms_since_2000);
     let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
     let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
     let duration = Duration::microseconds(ms_since_2000);
@@ -37,7 +41,6 @@ where
 {
     let val = &[val];
     let val = std::str::from_utf8(val)?;
-    println!("val: {}", val);
     let val = T::from_str(val).map_err(|e| DMSRError::StrumParseError(e.to_string()))?;
     Ok(val)
 }
@@ -83,7 +86,8 @@ fn read_columns(num_columns: u16, cursor: &mut Cursor<&[u8]>) -> DMSRResult<Vec<
 pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     let mut cursor = Cursor::new(event);
 
-    // Skip the 'w' identifier and the lsn info (which will be in the event body)
+    // Skip the 'w' identifier (first byte) and the lsn info (next 16 bytes)
+    // The lsn info will be captured by Begin and Commit info
     cursor.set_position(17);
 
     let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
@@ -309,6 +313,41 @@ pub fn parse_insert_event(
         columns,
     };
     Ok(PgOutputEvent::Insert(pgoutput))
+}
+
+pub async fn keep_alive(
+    event: &Bytes,
+    stream: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
+) -> DMSRResult<()> {
+    let last_byte = event.last().unwrap_or(&0);
+    if last_byte != &1 {
+        return Ok(()); // We don't need to send a reply
+    }
+
+    let now = SystemTime::now();
+    let duration_since_epoch = now.duration_since(UNIX_EPOCH)?;
+    let timestamp_micros = duration_since_epoch.as_secs() * 1_000_000
+        + u64::from(duration_since_epoch.subsec_micros());
+
+    // Write the Standby Status Update message header
+    let mut buf = Cursor::new(Vec::new());
+    buf.write_u8(b'r')?;
+    buf.write_i64::<BigEndian>(0)?; // Write current XLog position here
+    buf.write_i64::<BigEndian>(0)?; // Write current flush position here
+    buf.write_i64::<BigEndian>(0)?; // Write current apply position here
+    buf.write_i64::<BigEndian>(timestamp_micros as i64)?; // Write the current timestamp here
+    buf.write_u8(1)?; // 1 if you want to request a reply from the server, 0 otherwise
+
+    let msg = buf.into_inner();
+    let msg = Bytes::from(msg);
+
+    future::poll_fn(|cx| {
+        ready!(stream.as_mut().poll_ready(cx))?;
+        stream.as_mut().start_send(msg.clone())?;
+        stream.as_mut().poll_flush(cx)
+    })
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
