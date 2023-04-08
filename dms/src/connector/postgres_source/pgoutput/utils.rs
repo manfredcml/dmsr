@@ -1,5 +1,5 @@
 use crate::connector::postgres_source::pgoutput::events::{
-    BeginEvent, ColumnData, ColumnDataCategory, CommitEvent, InsertEvent, MessageType,
+    BeginEvent, ColumnData, ColumnDataCategory, CommitEvent, DeleteEvent, InsertEvent, MessageType,
     PgOutputEvent, RelationColumn, RelationEvent, ReplicationIdentity, TupleType, UpdateEvent,
 };
 use crate::error::generic::{DMSRError, DMSRResult};
@@ -110,7 +110,38 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
             let pgoutput = parse_update_event(timestamp, &mut cursor)?;
             Ok(pgoutput)
         }
+        MessageType::Delete => {
+            let pgoutput = parse_delete_event(timestamp, &mut cursor)?;
+            Ok(pgoutput)
+        }
     }
+}
+
+pub fn parse_delete_event(
+    timestamp: NaiveDateTime,
+    cursor: &mut Cursor<&[u8]>,
+) -> DMSRResult<PgOutputEvent> {
+    let relation_id = cursor.read_u32::<BigEndian>()?;
+    let tuple_type = parse_u8_into_enum::<TupleType>(cursor.read_u8()?)?;
+
+    if tuple_type == TupleType::New {
+        return Err(DMSRError::PostgresError(
+            "Delete event with non-key tuple".to_string(),
+        ));
+    }
+
+    let num_columns = cursor.read_u16::<BigEndian>()?;
+    let columns = read_columns(num_columns, cursor)?;
+
+    let pgoutput = DeleteEvent {
+        timestamp,
+        tuple_type,
+        relation_id,
+        columns,
+        num_columns,
+    };
+
+    Ok(PgOutputEvent::Delete(pgoutput))
 }
 
 pub fn parse_update_event(
@@ -256,6 +287,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_delete() {
+        let event =
+            b"w\0\0\0\0\x01Xp`\0\0\0\0\x01Xp`\0\x02\x9b\xd0.(\xeb6D\0\0@\nK\0\x02t\0\0\0\x011n";
+        let event = event as &[u8];
+
+        let pgoutput = parse_pgoutput_event(event);
+        assert!(pgoutput.is_ok());
+
+        let event = match pgoutput.unwrap() {
+            PgOutputEvent::Delete(event) => event,
+            _ => panic!("Expected Delete event"),
+        };
+        let timestamp = parse_timestamp(734268383357750);
+
+        assert_eq!(event.timestamp, timestamp);
+        assert_eq!(event.relation_id, 16394);
+        assert_eq!(event.tuple_type, TupleType::Key);
+        assert_eq!(event.num_columns, 2);
+        assert_eq!(event.columns.len(), 2);
+        assert_eq!(event.columns[0].column_data_category, ColumnDataCategory::Text);
+        assert_eq!(event.columns[0].column_data_length, Some(1));
+        assert_eq!(event.columns[0].column_value, Some("1".to_string()));
+        assert_eq!(event.columns[1].column_data_category, ColumnDataCategory::Null);
+        assert_eq!(event.columns[1].column_data_length, None);
+        assert_eq!(event.columns[1].column_value, None);
+    }
+
+    #[test]
     fn test_parse_update() {
         let event = b"w\0\0\0\0\x01Xn\xc0\0\0\0\0\x01Xn\xc0\0\x02\x9b\xcf0\xc5\0\x12U\0\0@\nN\0\x02t\0\0\0\x011t\0\0\0\x05test3";
         let event = event as &[u8];
@@ -299,7 +358,7 @@ mod tests {
 
         let event = match pgoutput.unwrap() {
             PgOutputEvent::Commit(event) => event,
-            _ => panic!("Expected Relation event"),
+            _ => panic!("Expected Commit event"),
         };
         let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
@@ -325,7 +384,7 @@ mod tests {
 
         let event = match pgoutput.unwrap() {
             PgOutputEvent::Begin(event) => event,
-            _ => panic!("Expected Relation event"),
+            _ => panic!("Expected Begin event"),
         };
         let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
@@ -350,7 +409,7 @@ mod tests {
 
         let event = match pgoutput.unwrap() {
             PgOutputEvent::Insert(event) => event,
-            _ => panic!("Expected Relation event"),
+            _ => panic!("Expected Insert event"),
         };
         let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();

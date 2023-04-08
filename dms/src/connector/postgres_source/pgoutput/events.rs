@@ -9,6 +9,7 @@ pub enum PgOutputEvent {
     Begin(BeginEvent),
     Commit(CommitEvent),
     Update(UpdateEvent),
+    Delete(DeleteEvent),
 }
 
 #[derive(Debug)]
@@ -58,6 +59,15 @@ pub struct UpdateEvent {
 }
 
 #[derive(Debug)]
+pub struct DeleteEvent {
+    pub timestamp: NaiveDateTime,
+    pub relation_id: u32,
+    pub tuple_type: TupleType,
+    pub num_columns: u16,
+    pub columns: Vec<ColumnData>,
+}
+
+#[derive(Debug)]
 pub struct ColumnData {
     pub column_data_category: ColumnDataCategory,
     pub column_data_length: Option<u32>,
@@ -96,6 +106,8 @@ pub enum MessageType {
     Commit,
     #[strum(serialize = "U")]
     Update,
+    #[strum(serialize = "D")]
+    Delete,
 }
 
 #[derive(Debug, PartialEq, EnumString, EnumVariantNames)]
