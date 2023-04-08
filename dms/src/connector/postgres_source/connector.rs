@@ -60,45 +60,57 @@ impl Connector for PostgresSourceConnector {
     }
 
     async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
-        let client = match self.client.as_mut() {
-            Some(client) => client,
-            None => {
-                let err = MissingValueError::new("Client is not initialized");
-                return Err(err.into());
-            }
-        };
+        let client = self
+            .client
+            .as_mut()
+            .ok_or(MissingValueError::new("Client is not initialized"))?;
 
-        let slot_name = format!(
-            "slot_{}",
-            &SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs()
+        let slot_name = format!("dmsr_slot_{}", self.connector_name);
+        let slot_query = format!("CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\"", slot_name);
+
+        let slot_query_res = client.simple_query(slot_query.as_str()).await;
+
+        let lsn: String;
+        if let Ok(msg) = slot_query_res {
+            let res = msg
+                .into_iter()
+                .filter_map(|m| match m {
+                    SimpleQueryMessage::Row(r) => Some(r),
+                    _ => None,
+                })
+                .collect::<Vec<SimpleQueryRow>>();
+
+            lsn = res[0]
+                .get("consistent_point")
+                .ok_or(DMSRError::PostgresError("No LSN found".into()))?
+                .to_string();
+        } else {
+            let slot_query = format!(
+                "SELECT * FROM pg_replication_slots WHERE slot_name = '{}'",
+                slot_name
+            );
+
+            let slot_query_res = client.simple_query(slot_query.as_str()).await?;
+
+            let res = slot_query_res
+                .into_iter()
+                .filter_map(|m| match m {
+                    SimpleQueryMessage::Row(r) => Some(r),
+                    _ => None,
+                })
+                .collect::<Vec<SimpleQueryRow>>();
+
+            lsn = res[0]
+                .get("confirmed_flush_lsn")
+                .ok_or(DMSRError::PostgresError("No LSN found".into()))?
+                .to_string();
+        }
+
+        let query = format!(
+            "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" 'all_tables')",
+            slot_name,
+            lsn
         );
-
-        let slot_query = format!(
-            "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL \"pgoutput\"",
-            slot_name
-        );
-
-        let slot_query_res: Vec<SimpleQueryRow> = client
-            .simple_query(slot_query.as_str())
-            .await?
-            .into_iter()
-            .filter_map(|m| match m {
-                SimpleQueryMessage::Row(r) => Some(r),
-                _ => None,
-            })
-            .collect();
-
-        let lsn = match slot_query_res[0].get("consistent_point") {
-            Some(lsn) => lsn,
-            None => {
-                return Err(DMSRError::PostgresError("No LSN found".into()));
-            }
-        };
-
-        let query = format!("START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" 'all_tables')", slot_name, lsn);
 
         let stream = client.copy_both_simple::<Bytes>(&query).await?;
         let mut stream = Box::pin(stream);
@@ -106,13 +118,13 @@ impl Connector for PostgresSourceConnector {
         while let Some(event) = stream.next().await {
             let event = event?;
             let first_byte = &event[0];
+            let event = event.as_ref();
 
             match first_byte {
                 b'k' => {
-                    keep_alive(&event, &mut stream).await?;
+                    keep_alive(event, &mut stream).await?;
                 }
                 b'w' => {
-                    let event = event.as_ref();
                     let pg_output_event = parse_pgoutput_event(event)?;
 
                     match pg_output_event {

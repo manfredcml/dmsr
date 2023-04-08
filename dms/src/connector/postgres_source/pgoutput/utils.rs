@@ -316,13 +316,17 @@ pub fn parse_insert_event(
 }
 
 pub async fn keep_alive(
-    event: &Bytes,
+    event: &[u8],
     stream: &mut Pin<Box<CopyBothDuplex<Bytes>>>,
 ) -> DMSRResult<()> {
     let last_byte = event.last().unwrap_or(&0);
     if last_byte != &1 {
         return Ok(()); // We don't need to send a reply
     }
+
+    let mut cursor = Cursor::new(event);
+    cursor.set_position(1); // Skip the 'k' byte
+    let lsn = cursor.read_i64::<BigEndian>()?;
 
     let now = SystemTime::now();
     let duration_since_epoch = now.duration_since(UNIX_EPOCH)?;
@@ -332,9 +336,9 @@ pub async fn keep_alive(
     // Write the Standby Status Update message header
     let mut buf = Cursor::new(Vec::new());
     buf.write_u8(b'r')?;
-    buf.write_i64::<BigEndian>(0)?; // Write current XLog position here
-    buf.write_i64::<BigEndian>(0)?; // Write current flush position here
-    buf.write_i64::<BigEndian>(0)?; // Write current apply position here
+    buf.write_i64::<BigEndian>(lsn)?; // Write current XLog position here
+    buf.write_i64::<BigEndian>(lsn)?; // Write current flush position here
+    buf.write_i64::<BigEndian>(lsn)?; // Write current apply position here
     buf.write_i64::<BigEndian>(timestamp_micros as i64)?; // Write the current timestamp here
     buf.write_u8(1)?; // 1 if you want to request a reply from the server, 0 otherwise
 
