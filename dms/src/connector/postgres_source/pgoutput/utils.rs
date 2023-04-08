@@ -21,6 +21,24 @@ fn read_c_string(cursor: &mut Cursor<&[u8]>) -> DMSRResult<String> {
     Ok(parsed_string)
 }
 
+fn parse_timestamp(ms_since_2000: i64) -> NaiveDateTime {
+    let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+    let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
+    let duration = Duration::microseconds(ms_since_2000);
+    start_date + duration
+}
+
+fn parse_u8_into_enum<T>(val: u8) -> DMSRResult<T>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::fmt::Display,
+{
+    let val = &[val];
+    let val = std::str::from_utf8(val)?;
+    let val = T::from_str(val).map_err(|e| DMSRError::StrumParseError(e.to_string()))?;
+    Ok(val)
+}
+
 pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     let mut cursor = Cursor::new(event);
 
@@ -28,15 +46,9 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     cursor.set_position(17);
 
     let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
-    println!("ms_since_2000: {}", ms_since_2000);
-    let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-    let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
-    let duration = Duration::microseconds(ms_since_2000);
-    let timestamp = start_date + duration;
+    let timestamp = parse_timestamp(ms_since_2000);
 
-    let message_type = &[cursor.read_u8()?];
-    let message_type = std::str::from_utf8(message_type)?;
-    let message_type = MessageType::from_str(message_type)?;
+    let message_type = parse_u8_into_enum::<MessageType>(cursor.read_u8()?)?;
 
     match message_type {
         MessageType::Relation => {
@@ -68,9 +80,7 @@ pub fn parse_update_event(
 ) -> DMSRResult<PgOutputEvent> {
     let relation_id = cursor.read_u32::<BigEndian>()?;
 
-    let tuple_type = &[cursor.read_u8()?];
-    let tuple_type = std::str::from_utf8(tuple_type)?;
-    let tuple_type = TupleType::from_str(tuple_type)?;
+    let tuple_type = parse_u8_into_enum::<TupleType>(cursor.read_u8()?)?;
 
     match tuple_type {
         TupleType::Key => {
@@ -91,9 +101,7 @@ pub fn parse_update_event(
     let mut columns: Vec<ColumnData> = vec![];
 
     for _ in 0..num_columns {
-        let col_data_category = &[cursor.read_u8()?];
-        let col_data_category = std::str::from_utf8(col_data_category)?;
-        let col_data_category = ColumnDataCategory::from_str(col_data_category)?;
+        let col_data_category = parse_u8_into_enum::<ColumnDataCategory>(cursor.read_u8()?)?;
 
         match col_data_category {
             ColumnDataCategory::Null => {
@@ -143,11 +151,7 @@ pub fn parse_commit_event(
     let lsn = cursor.read_u64::<BigEndian>()?;
 
     let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
-    let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-    let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
-    let duration = Duration::microseconds(ms_since_2000);
-    println!("ms_since_2000: {}", ms_since_2000);
-    let commit_timestamp = start_date + duration;
+    let commit_timestamp = parse_timestamp(ms_since_2000);
 
     let pgoutput = CommitEvent {
         timestamp,
@@ -166,11 +170,7 @@ pub fn parse_begin_event(
     let lsn = cursor.read_u64::<BigEndian>()?;
 
     let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
-    let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-    let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
-    let duration = Duration::microseconds(ms_since_2000);
-    println!("ms_since_2000: {}", ms_since_2000);
-    let commit_timestamp = start_date + duration;
+    let commit_timestamp = parse_timestamp(ms_since_2000);
 
     let tx_xid = cursor.read_u32::<BigEndian>()?;
 
@@ -192,10 +192,7 @@ pub fn parse_relation_event(
     let schema_name = read_c_string(cursor)?;
     let table_name = read_c_string(cursor)?;
 
-    let repl_identity = &[cursor.read_u8()?];
-    let repl_identity = std::str::from_utf8(repl_identity)?;
-    let repl_identity = ReplicationIdentity::from_str(repl_identity)?;
-
+    let repl_identity = parse_u8_into_enum::<ReplicationIdentity>(cursor.read_u8()?)?;
     let num_columns = cursor.read_u16::<BigEndian>()?;
 
     let mut columns: Vec<RelationColumn> = vec![];
@@ -233,17 +230,13 @@ pub fn parse_insert_event(
 ) -> DMSRResult<PgOutputEvent> {
     let relation_id = cursor.read_u32::<BigEndian>()?;
 
-    let tuple_type = &[cursor.read_u8()?];
-    let tuple_type = std::str::from_utf8(tuple_type)?;
-    let tuple_type = TupleType::from_str(tuple_type)?;
+    let tuple_type = parse_u8_into_enum::<TupleType>(cursor.read_u8()?)?;
 
     let num_columns = cursor.read_u16::<BigEndian>()?;
 
     let mut columns: Vec<ColumnData> = vec![];
     for _ in 0..num_columns {
-        let col_data_category = &[cursor.read_u8()?];
-        let col_data_category = std::str::from_utf8(col_data_category)?;
-        let col_data_category = ColumnDataCategory::from_str(col_data_category)?;
+        let col_data_category = parse_u8_into_enum::<ColumnDataCategory>(cursor.read_u8()?)?;
 
         match col_data_category {
             ColumnDataCategory::Null => {
