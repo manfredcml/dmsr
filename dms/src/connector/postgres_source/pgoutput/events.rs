@@ -6,7 +6,7 @@ pub enum PgOutputEvent {
     Relation(RelationEvent),
     Insert(InsertEvent),
     Begin(BeginEvent),
-    Update(UpdateEvent),
+    Commit(CommitEvent),
 }
 
 #[derive(Debug)]
@@ -29,6 +29,15 @@ pub struct BeginEvent {
 }
 
 #[derive(Debug)]
+pub struct CommitEvent {
+    pub timestamp: NaiveDateTime,
+    pub flags: u8,
+    pub lsn_commit: u64,
+    pub lsn: u64,
+    pub commit_timestamp: NaiveDateTime,
+}
+
+#[derive(Debug)]
 pub struct InsertEvent {
     pub timestamp: NaiveDateTime,
     pub relation_id: u32,
@@ -45,6 +54,7 @@ pub enum MessageType {
     Relation,
     Insert,
     Begin,
+    Commit
 }
 
 impl MessageType {
@@ -53,6 +63,7 @@ impl MessageType {
             'R' => Ok(MessageType::Relation),
             'I' => Ok(MessageType::Insert),
             'B' => Ok(MessageType::Begin),
+            'C' => Ok(MessageType::Commit),
             _ => Err(DMSRError::PostgresError("Unknown message type".into())),
         }
     }
