@@ -22,6 +22,7 @@ fn read_c_string(cursor: &mut Cursor<&[u8]>) -> DMSRResult<String> {
 }
 
 fn parse_timestamp(ms_since_2000: i64) -> NaiveDateTime {
+    println!("ms_since_2000: {}", ms_since_2000);
     let start_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
     let start_date = start_date.and_hms_opt(0, 0, 0).unwrap();
     let duration = Duration::microseconds(ms_since_2000);
@@ -253,6 +254,40 @@ pub fn parse_insert_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_update() {
+        let event = b"w\0\0\0\0\x01Xn\xc0\0\0\0\0\x01Xn\xc0\0\x02\x9b\xcf0\xc5\0\x12U\0\0@\nN\0\x02t\0\0\0\x011t\0\0\0\x05test3";
+        let event = event as &[u8];
+
+        let pgoutput = parse_pgoutput_event(event);
+        assert!(pgoutput.is_ok());
+
+        let event = match pgoutput.unwrap() {
+            PgOutputEvent::Update(event) => event,
+            _ => panic!("Expected Relation event"),
+        };
+        let timestamp = parse_timestamp(734264132173842);
+
+        assert_eq!(event.timestamp, timestamp);
+        assert_eq!(event.relation_id, 16394);
+        assert_eq!(event.tuple_type, TupleType::New);
+        assert_eq!(event.num_columns, 2);
+        assert_eq!(event.columns.len(), 2);
+        assert_eq!(
+            event.columns[0].column_data_category,
+            ColumnDataCategory::Text
+        );
+        assert_eq!(event.columns[0].column_data_length, Some(1));
+        assert_eq!(event.columns[0].column_value, Some("1".to_string()));
+
+        assert_eq!(
+            event.columns[1].column_data_category,
+            ColumnDataCategory::Text
+        );
+        assert_eq!(event.columns[1].column_data_length, Some(5));
+        assert_eq!(event.columns[1].column_value, Some("test3".to_string()));
+    }
 
     #[test]
     fn test_parse_commit() {
