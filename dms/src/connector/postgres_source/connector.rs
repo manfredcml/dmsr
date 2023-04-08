@@ -8,13 +8,10 @@ use crate::error::missing_value::MissingValueError;
 use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use bytes::Bytes;
-use futures::{future, ready, Sink, StreamExt};
+use futures::StreamExt;
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::pin::Pin;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
 
 pub struct PostgresSourceConnector {
@@ -60,67 +57,15 @@ impl Connector for PostgresSourceConnector {
     }
 
     async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
-        let client = self
-            .client
-            .as_mut()
-            .ok_or(MissingValueError::new("Client is not initialized"))?;
-
-        let slot_name = format!("dmsr_slot_{}", self.connector_name);
-        let slot_query = format!("CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\"", slot_name);
-
-        let slot_query_res = client.simple_query(slot_query.as_str()).await;
-
-        let lsn: String;
-        if let Ok(msg) = slot_query_res {
-            let res = msg
-                .into_iter()
-                .filter_map(|m| match m {
-                    SimpleQueryMessage::Row(r) => Some(r),
-                    _ => None,
-                })
-                .collect::<Vec<SimpleQueryRow>>();
-
-            lsn = res[0]
-                .get("consistent_point")
-                .ok_or(DMSRError::PostgresError("No LSN found".into()))?
-                .to_string();
-        } else {
-            let slot_query = format!(
-                "SELECT * FROM pg_replication_slots WHERE slot_name = '{}'",
-                slot_name
-            );
-
-            let slot_query_res = client.simple_query(slot_query.as_str()).await?;
-
-            let res = slot_query_res
-                .into_iter()
-                .filter_map(|m| match m {
-                    SimpleQueryMessage::Row(r) => Some(r),
-                    _ => None,
-                })
-                .collect::<Vec<SimpleQueryRow>>();
-
-            lsn = res[0]
-                .get("confirmed_flush_lsn")
-                .ok_or(DMSRError::PostgresError("No LSN found".into()))?
-                .to_string();
-        }
-
-        let query = format!(
-            "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" 'all_tables')",
-            slot_name,
-            lsn
-        );
-
-        let stream = client.copy_both_simple::<Bytes>(&query).await?;
-        let mut stream = Box::pin(stream);
+        self.create_publication().await?;
+        let (lsn, slot_name) = self.create_replication_slot().await?;
+        let mut stream = self.start_replication_slot(lsn, slot_name).await?;
 
         while let Some(event) = stream.next().await {
             let event = event?;
-            let first_byte = &event[0];
             let event = event.as_ref();
 
-            match first_byte {
+            match &event[0] {
                 b'k' => {
                     keep_alive(event, &mut stream).await?;
                 }
@@ -163,6 +108,86 @@ impl Connector for PostgresSourceConnector {
 }
 
 impl PostgresSourceConnector {
+    async fn execute_query(&self, query: String) -> DMSRResult<Vec<SimpleQueryRow>> {
+        let res = self
+            .client
+            .as_ref()
+            .ok_or(MissingValueError::new("Client is not initialized"))?
+            .simple_query(query.as_str())
+            .await?;
+
+        let res = res
+            .into_iter()
+            .filter_map(|m| match m {
+                SimpleQueryMessage::Row(r) => Some(r),
+                _ => None,
+            })
+            .collect::<Vec<SimpleQueryRow>>();
+
+        Ok(res)
+    }
+
+    async fn create_publication(&self) -> DMSRResult<()> {
+        let publication_name = format!("dmsr_pub_all_tables_{}", self.connector_name);
+        let query = format!("CREATE PUBLICATION {} FOR ALL TABLES", publication_name);
+
+        let res = self.execute_query(query).await;
+        if res.is_err() {
+            println!("Publication already exists");
+        }
+
+        Ok(())
+    }
+
+    async fn create_replication_slot(&self) -> DMSRResult<(String, String)> {
+        let slot_name = format!("dmsr_slot_{}", self.connector_name);
+        let slot_query = format!("CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\"", slot_name);
+        let slot_query_res = self.execute_query(slot_query).await;
+
+        let lsn: String;
+        if let Ok(res) = slot_query_res {
+            lsn = res[0]
+                .get("consistent_point")
+                .ok_or(DMSRError::PostgresError("No LSN found".into()))?
+                .to_string();
+        } else {
+            let find_slot_query = format!(
+                "SELECT * FROM pg_replication_slots WHERE slot_name = '{}'",
+                slot_name
+            );
+
+            let find_slot_res = self.execute_query(find_slot_query).await?;
+            lsn = find_slot_res[0]
+                .get("confirmed_flush_lsn")
+                .ok_or(DMSRError::PostgresError("No LSN found".into()))?
+                .to_string();
+        }
+
+        Ok((lsn, slot_name))
+    }
+
+    async fn start_replication_slot(
+        &mut self,
+        lsn: String,
+        slot_name: String,
+    ) -> DMSRResult<Pin<Box<CopyBothDuplex<Bytes>>>> {
+        let client = self
+            .client
+            .as_mut()
+            .ok_or(MissingValueError::new("Client is not initialized"))?;
+
+        let query = format!(
+            "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" 'all_tables')",
+            slot_name,
+            lsn
+        );
+
+        let stream = client.copy_both_simple::<Bytes>(&query).await?;
+        let stream = Box::pin(stream);
+
+        Ok(stream)
+    }
+
     fn process_event(&self, event: &Bytes) -> DMSRResult<Option<JSONChangeEvent>> {
         let b = &event[25..];
         let s = std::str::from_utf8(b)?;
