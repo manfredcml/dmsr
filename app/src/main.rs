@@ -148,6 +148,7 @@ where
 
         info!("Starting stream...");
         connector.stream(kafka).await?;
+
         Ok(())
     });
 

@@ -6,18 +6,25 @@ use std::time::Duration;
 
 #[derive(Deserialize, Serialize, Debug)]
 struct GetResponse {
-    version: String,
-    status: String,
+    connector_names: Vec<String>,
 }
 
 #[get("/connectors")]
 pub async fn get_connectors(state: web::Data<AppState>) -> HttpResponse {
-    let config = &state.kafka.config;
-    println!("config: {:?}", config);
+    let active_connectors = &state.active_connectors;
+
+    let connector_names: Vec<String>;
+    {
+        connector_names = active_connectors
+            .lock()
+            .unwrap()
+            .keys()
+            .map(|s| s.to_string())
+            .collect();
+    }
 
     let resp = GetResponse {
-        version: "0.0.1".to_string(),
-        status: "ok".to_string(),
+        connector_names
     };
     HttpResponse::Ok().json(resp)
 }
