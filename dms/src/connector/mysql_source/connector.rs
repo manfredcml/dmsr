@@ -21,23 +21,17 @@ pub struct MySQLSourceConnector {
     config: MySQLSourceConfig,
     stream: Option<BinlogStream>,
     connector_name: String,
-    topic_prefix: String,
 }
 
 #[async_trait]
 impl Connector for MySQLSourceConnector {
     type Config = MySQLSourceConfig;
 
-    fn new(
-        connector_name: String,
-        topic_prefix: String,
-        config: &MySQLSourceConfig,
-    ) -> DMSRResult<Box<Self>> {
+    fn new(connector_name: String, config: &MySQLSourceConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(MySQLSourceConnector {
             config: config.clone(),
             stream: None,
             connector_name,
-            topic_prefix,
         }))
     }
 

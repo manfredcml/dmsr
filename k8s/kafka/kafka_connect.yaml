@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-connect
+  namespace: dms
+  labels:
+    app: kafka-connect
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-connect
+  template:
+    metadata:
+      name: kafka-connect
+      labels:
+        app: kafka-connect
+    spec:
+      containers:
+        - name: kafka-connect
+          image: quay.io/debezium/connect:2.1
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8083
+          env:
+            - name: GROUP_ID
+              value: "1"
+            - name: CONFIG_STORAGE_TOPIC
+              value: "test_connect_configs"
+            - name: OFFSET_STORAGE_TOPIC
+              value: "test_connect_offsets"
+            - name: STATUS_STORAGE_TOPIC
+              value: "test_connect_statuses"
+            - name: BOOTSTRAP_SERVERS
+              value: "kafka:9092"
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-connect
+  namespace: dms
+  labels:
+    app: kafka-connect
+spec:
+  ports:
+    - port: 8083
+      targetPort: 8083
+      protocol: TCP
+  selector:
+    app: kafka-connect

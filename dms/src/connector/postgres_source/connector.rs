@@ -1,7 +1,7 @@
 use crate::connector::connector::Connector;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
 use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
-use crate::connector::postgres_source::pgoutput::events::PgOutputEvent;
+use crate::connector::postgres_source::pgoutput::events::{PgOutputEvent, RelationEvent};
 use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
 use crate::error::generic::{DMSRError, DMSRResult};
 use crate::error::missing_value::MissingValueError;
@@ -18,23 +18,19 @@ pub struct PostgresSourceConnector {
     config: PostgresSourceConfig,
     client: Option<Client>,
     connector_name: String,
-    topic_prefix: String,
+    relation_map: HashMap<u32, RelationEvent>,
 }
 
 #[async_trait]
 impl Connector for PostgresSourceConnector {
     type Config = PostgresSourceConfig;
 
-    fn new(
-        connector_name: String,
-        topic_prefix: String,
-        config: &PostgresSourceConfig,
-    ) -> DMSRResult<Box<Self>> {
+    fn new(connector_name: String, config: &PostgresSourceConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(PostgresSourceConnector {
             config: config.clone(),
             client: None,
             connector_name,
-            topic_prefix,
+            relation_map: HashMap::new(),
         }))
     }
 
@@ -81,6 +77,7 @@ impl Connector for PostgresSourceConnector {
                         }
                         PgOutputEvent::Relation(event) => {
                             println!("Relation: {:?}", event);
+                            self.relation_map.insert(event.relation_id, event);
                         }
                         PgOutputEvent::Insert(event) => {
                             println!("Insert: {:?}", event);

@@ -1,7 +1,13 @@
-use crate::config::AppConfig;
+use dms::error::generic::DMSRResult;
 use dms::kafka::kafka::Kafka;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::task::JoinHandle;
+
+pub type ActiveConnectors = HashMap<String, JoinHandle<DMSRResult<()>>>;
+pub type MutexActiveConnectors = Arc<Mutex<ActiveConnectors>>;
 
 pub struct AppState {
     pub kafka: Kafka,
-    pub app_config: AppConfig,
+    pub active_connectors: MutexActiveConnectors,
 }

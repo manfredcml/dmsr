@@ -6,11 +6,7 @@ use async_trait::async_trait;
 pub trait Connector {
     type Config;
 
-    fn new(
-        connector_name: String,
-        topic_prefix: String,
-        config: &Self::Config,
-    ) -> DMSRResult<Box<Self>>
+    fn new(connector_name: String, config: &Self::Config) -> DMSRResult<Box<Self>>
     where
         Self: Sized;
 

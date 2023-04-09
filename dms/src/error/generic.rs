@@ -19,6 +19,7 @@ pub enum DMSRError {
     MySQLError(String),
     UnimplementedError(String),
     StrumParseError(String),
+    LockError(String),
 }
 
 impl From<strum::ParseError> for DMSRError {

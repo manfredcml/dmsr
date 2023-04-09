@@ -2,7 +2,6 @@ use crate::AppState;
 use actix_web::{get, post, web, HttpResponse};
 use rdkafka::producer::FutureRecord;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -35,10 +34,6 @@ pub async fn post_connectors(
     state: web::Data<AppState>,
 ) -> HttpResponse {
     let kafka = &state.kafka;
-    let producer = match kafka.producer {
-        Some(ref producer) => producer,
-        None => return HttpResponse::InternalServerError().finish(),
-    };
 
     let topic = &kafka.config.config_topic;
     let key = body.name.as_bytes();
@@ -46,7 +41,7 @@ pub async fn post_connectors(
     let message = message.as_bytes();
 
     let record = FutureRecord::to(topic).key(key).payload(message);
-    let status = producer.send(record, Duration::from_secs(0)).await;
+    let status = kafka.producer.send(record, Duration::from_secs(0)).await;
 
     match status {
         Ok(r) => {
