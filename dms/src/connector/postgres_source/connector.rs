@@ -1,11 +1,14 @@
 use crate::connector::connector::Connector;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
 use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
-use crate::connector::postgres_source::pgoutput::events::{PgOutputEvent, RelationEvent};
+use crate::connector::postgres_source::pgoutput::events::{
+    InsertEvent, PgOutputEvent, RelationEvent,
+};
 use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
 use crate::error::error::{DMSRError, DMSRResult};
-use crate::event::postgres_types::PostgresKafkaConnectTypeMap;
 use crate::kafka::kafka::Kafka;
+use crate::message::message::{Field, KafkaMessage, Payload, Schema};
+use crate::message::postgres_types::PostgresKafkaConnectTypeMap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
@@ -68,12 +71,7 @@ impl Connector for PostgresSourceConnector {
                         }
                         PgOutputEvent::Insert(event) => {
                             println!("Insert: {:?}", event);
-                            let relation_id = event.relation_id;
-                            let relation_event = self
-                                .relation_map
-                                .get(&relation_id)
-                                .ok_or(DMSRError::PostgresError("Relation not found".into()))?;
-                            let columns = &relation_event.columns;
+                            self.process_insert_event(event, &mut kafka).await?;
                         }
                         PgOutputEvent::Update(event) => {
                             println!("Update: {:?}", event);
@@ -205,5 +203,67 @@ impl PostgresSourceConnector {
         let stream = Box::pin(stream);
 
         Ok(stream)
+    }
+
+    async fn process_insert_event(&self, event: InsertEvent, kafka: &mut Kafka) -> DMSRResult<()> {
+        let relation_id = event.relation_id;
+        let relation_event = self
+            .relation_map
+            .get(&relation_id)
+            .ok_or(DMSRError::PostgresError("Relation not found".into()))?;
+        let columns = &relation_event.columns;
+
+        let fields = columns
+            .iter()
+            .map(|c| {
+                let pg_col_type = self.pg_oid_type_map.get(&c.column_type);
+                let unknown = String::from("unknown");
+                let col_type = self
+                    .pg_kafka_connect_type_map
+                    .get(pg_col_type.unwrap_or(&unknown))
+                    .unwrap_or(unknown);
+                Field {
+                    r#type: col_type,
+                    optional: !c.is_pk,
+                    field: c.column_name.clone(),
+                    name: None,
+                    fields: None,
+                }
+            })
+            .collect::<Vec<Field>>();
+
+        let before = Field {
+            r#type: "struct".into(),
+            optional: true,
+            field: "before".into(),
+            name: None,
+            fields: Some(fields),
+        };
+
+        let after = before.clone();
+
+        let schema_name = format!(
+            "{}.{}.Envelope",
+            &relation_event.namespace, &relation_event.relation_name
+        );
+
+        let schema = Schema {
+            r#type: "struct".to_string(),
+            fields: vec![before, after],
+            optional: false,
+            name: schema_name,
+        };
+
+        let payload = Payload {
+            before: None,
+            after: None,
+            op: "".to_string(),
+            ts_ms: 0,
+        };
+
+        let kafka_message = KafkaMessage { schema, payload };
+        kafka.ingest(kafka_message).await?;
+
+        Ok(())
     }
 }

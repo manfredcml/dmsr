@@ -1,5 +1,6 @@
 use crate::error::error::DMSRResult;
 use crate::kafka::config::KafkaConfig;
+use crate::message::message::KafkaMessage;
 use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
@@ -50,34 +51,34 @@ impl Kafka {
         Ok(())
     }
 
-    // pub async fn ingest(
-    //     &mut self,
-    //     topic: String,
-    //     event: JSONChangeEvent,
-    //     key: Option<String>,
-    // ) -> DMSRResult<()> {
-    //     let message = serde_json::to_string(&event)?;
-    //
-    //     println!("Kafka message: {}", message);
-    //
-    //     let mut record =
-    //         rdkafka::producer::FutureRecord::to(topic.as_str()).payload(message.as_str());
-    //
-    //     let key = key.unwrap_or_default();
-    //     if !key.is_empty() {
-    //         record = record.key(key.as_str());
-    //     }
-    //
-    //     let status = self.producer.send(record, Duration::from_secs(0)).await;
-    //     return match status {
-    //         Ok(delivery_status) => {
-    //             println!("Delivery status: {:?}", delivery_status);
-    //             Ok(())
-    //         }
-    //         Err((err, message)) => {
-    //             println!("Send failed: {:?}: {:?}", err, message);
-    //             Err(err.into())
-    //         }
-    //     };
-    // }
+    pub async fn ingest(
+        &mut self,
+        topic: String,
+        message: KafkaMessage,
+        key: Option<String>,
+    ) -> DMSRResult<()> {
+        let message = serde_json::to_string(&message)?;
+
+        println!("Kafka message: {}", message);
+
+        let mut record =
+            rdkafka::producer::FutureRecord::to(topic.as_str()).payload(message.as_str());
+
+        let key = key.unwrap_or_default();
+        if !key.is_empty() {
+            record = record.key(key.as_str());
+        }
+
+        let status = self.producer.send(record, Duration::from_secs(0)).await;
+        return match status {
+            Ok(delivery_status) => {
+                println!("Delivery status: {:?}", delivery_status);
+                Ok(())
+            }
+            Err((err, message)) => {
+                println!("Send failed: {:?}: {:?}", err, message);
+                Err(err.into())
+            }
+        };
+    }
 }

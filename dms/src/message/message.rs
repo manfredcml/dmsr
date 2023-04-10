@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
-pub struct AvroEvent {
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+pub struct KafkaMessage {
     pub schema: Schema,
     pub payload: Payload,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct Schema {
     pub r#type: String,
     pub fields: Vec<Field>,
@@ -15,14 +15,16 @@ pub struct Schema {
     pub name: String,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct Field {
     pub r#type: String,
     pub optional: bool,
-    pub name: String,
+    pub name: Option<String>,
+    pub field: String,
+    pub fields: Option<Vec<Field>>,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct Payload {
     pub before: Option<HashMap<String, serde_json::Value>>,
     pub after: Option<HashMap<String, serde_json::Value>>,
