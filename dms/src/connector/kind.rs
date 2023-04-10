@@ -1,4 +1,4 @@
-use crate::error::generic::DMSRError;
+use crate::error::error::DMSRError;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 

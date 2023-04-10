@@ -1,4 +1,4 @@
-use crate::error::generic::DMSRResult;
+use crate::error::error::DMSRResult;
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
 
@@ -6,10 +6,9 @@ use async_trait::async_trait;
 pub trait Connector {
     type Config;
 
-    fn new(connector_name: String, config: &Self::Config) -> DMSRResult<Box<Self>>
+    async fn new(connector_name: String, config: &Self::Config) -> DMSRResult<Box<Self>>
     where
         Self: Sized;
 
-    async fn connect(&mut self) -> DMSRResult<()>;
     async fn stream(&mut self, kafka: Kafka) -> DMSRResult<()>;
 }

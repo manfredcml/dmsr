@@ -1,8 +1,8 @@
 use crate::connector::connector::Connector;
 use crate::connector::mysql_source::config::MySQLSourceConfig;
 use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
-use crate::error::generic::{DMSRError, DMSRResult};
-use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
+use crate::error::error::{DMSRError, DMSRResult};
+// use crate::event::message::{DataType, Field, JSONChangeEvent, Operation, Schema};
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
 use byteorder::ReadBytesExt;
@@ -27,7 +27,7 @@ pub struct MySQLSourceConnector {
 impl Connector for MySQLSourceConnector {
     type Config = MySQLSourceConfig;
 
-    fn new(connector_name: String, config: &MySQLSourceConfig) -> DMSRResult<Box<Self>> {
+    async fn new(connector_name: String, config: &MySQLSourceConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(MySQLSourceConnector {
             config: config.clone(),
             stream: None,
@@ -35,23 +35,23 @@ impl Connector for MySQLSourceConnector {
         }))
     }
 
-    async fn connect(&mut self) -> DMSRResult<()> {
-        let conn_str = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            self.config.user,
-            self.config.password,
-            self.config.host,
-            self.config.port,
-            self.config.database
-        );
-
-        let pool = Pool::new(conn_str.as_str());
-        let conn = pool.get_conn().await?;
-        let binlog_request = BinlogRequest::new(2);
-        let stream = conn.get_binlog_stream(binlog_request).await?;
-        self.stream = Some(stream);
-        Ok(())
-    }
+    // async fn connect(&mut self) -> DMSRResult<()> {
+    //     let conn_str = format!(
+    //         "mysql://{}:{}@{}:{}/{}",
+    //         self.config.user,
+    //         self.config.password,
+    //         self.config.host,
+    //         self.config.port,
+    //         self.config.database
+    //     );
+    //
+    //     let pool = Pool::new(conn_str.as_str());
+    //     let conn = pool.get_conn().await?;
+    //     let binlog_request = BinlogRequest::new(2);
+    //     let stream = conn.get_binlog_stream(binlog_request).await?;
+    //     self.stream = Some(stream);
+    //     Ok(())
+    // }
 
     async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
         let stream = match self.stream.as_mut() {

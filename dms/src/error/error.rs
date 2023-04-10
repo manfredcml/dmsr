@@ -1,4 +1,3 @@
-use crate::error::missing_value::MissingValueError;
 use rdkafka::error::KafkaError;
 use std::time;
 
@@ -20,6 +19,13 @@ pub enum DMSRError {
     UnimplementedError(String),
     StrumParseError(String),
     LockError(String),
+    ParseIntError(String),
+}
+
+impl From<std::num::ParseIntError> for DMSRError {
+    fn from(error: std::num::ParseIntError) -> Self {
+        DMSRError::ParseIntError(error.to_string())
+    }
 }
 
 impl From<strum::ParseError> for DMSRError {
@@ -79,12 +85,6 @@ impl From<std::io::Error> for DMSRError {
 impl From<KafkaError> for DMSRError {
     fn from(error: KafkaError) -> Self {
         DMSRError::KafkaError(error.to_string())
-    }
-}
-
-impl From<MissingValueError> for DMSRError {
-    fn from(error: MissingValueError) -> Self {
-        DMSRError::MissingValueError(error.field_name.to_string())
     }
 }
 

@@ -3,9 +3,8 @@ use crate::connector::postgres_source::config::PostgresSourceConfig;
 use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
 use crate::connector::postgres_source::pgoutput::events::{PgOutputEvent, RelationEvent};
 use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
-use crate::error::generic::{DMSRError, DMSRResult};
-use crate::error::missing_value::MissingValueError;
-use crate::event::event::{DataType, Field, JSONChangeEvent, Operation, Schema};
+use crate::error::error::{DMSRError, DMSRResult};
+use crate::event::postgres_types::PostgresKafkaConnectTypeMap;
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -16,43 +15,31 @@ use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQu
 
 pub struct PostgresSourceConnector {
     config: PostgresSourceConfig,
-    client: Option<Client>,
+    client: Client,
     connector_name: String,
     relation_map: HashMap<u32, RelationEvent>,
+    pg_oid_type_map: HashMap<u32, String>,
+    pg_kafka_connect_type_map: PostgresKafkaConnectTypeMap,
 }
 
 #[async_trait]
 impl Connector for PostgresSourceConnector {
     type Config = PostgresSourceConfig;
 
-    fn new(connector_name: String, config: &PostgresSourceConfig) -> DMSRResult<Box<Self>> {
+    async fn new(connector_name: String, config: &PostgresSourceConfig) -> DMSRResult<Box<Self>> {
+        let client = Self::connect(config).await?;
         Ok(Box::new(PostgresSourceConnector {
             config: config.clone(),
-            client: None,
+            client,
             connector_name,
             relation_map: HashMap::new(),
+            pg_oid_type_map: HashMap::new(),
+            pg_kafka_connect_type_map: PostgresKafkaConnectTypeMap::new(),
         }))
     }
 
-    async fn connect(&mut self) -> DMSRResult<()> {
-        let endpoint = format!(
-            "host={} port={} user={} password={} replication=database",
-            self.config.host, self.config.port, self.config.user, self.config.password
-        );
-
-        let (client, connection) = tokio_postgres::connect(endpoint.as_str(), NoTls).await?;
-
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
-
-        self.client = Some(client);
-        Ok(())
-    }
-
     async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
+        self.get_oid_type_map().await?;
         self.create_publication().await?;
         let (lsn, slot_name) = self.create_replication_slot().await?;
         let mut stream = self.start_replication_slot(lsn, slot_name).await?;
@@ -81,6 +68,12 @@ impl Connector for PostgresSourceConnector {
                         }
                         PgOutputEvent::Insert(event) => {
                             println!("Insert: {:?}", event);
+                            let relation_id = event.relation_id;
+                            let relation_event = self
+                                .relation_map
+                                .get(&relation_id)
+                                .ok_or(DMSRError::PostgresError("Relation not found".into()))?;
+                            let columns = &relation_event.columns;
                         }
                         PgOutputEvent::Update(event) => {
                             println!("Update: {:?}", event);
@@ -105,13 +98,25 @@ impl Connector for PostgresSourceConnector {
 }
 
 impl PostgresSourceConnector {
+    async fn connect(config: &PostgresSourceConfig) -> DMSRResult<Client> {
+        let endpoint = format!(
+            "host={} port={} user={} password={} replication=database",
+            config.host, config.port, config.user, config.password
+        );
+
+        let (client, connection) = tokio_postgres::connect(endpoint.as_str(), NoTls).await?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+
+        Ok(client)
+    }
+
     async fn execute_query(&self, query: String) -> DMSRResult<Vec<SimpleQueryRow>> {
-        let res = self
-            .client
-            .as_ref()
-            .ok_or(MissingValueError::new("Client is not initialized"))?
-            .simple_query(query.as_str())
-            .await?;
+        let res = self.client.simple_query(query.as_str()).await?;
 
         let res = res
             .into_iter()
@@ -122,6 +127,28 @@ impl PostgresSourceConnector {
             .collect::<Vec<SimpleQueryRow>>();
 
         Ok(res)
+    }
+
+    async fn get_oid_type_map(&mut self) -> DMSRResult<()> {
+        let query = "SELECT oid, typname FROM pg_type";
+        let res = self.execute_query(query.into()).await?;
+
+        let mut map = HashMap::new();
+        for row in res {
+            let oid = row.get(0).ok_or(DMSRError::PostgresError("oid".into()))?;
+            let oid: u32 = oid.parse()?;
+
+            let type_name = row
+                .get(1)
+                .ok_or(DMSRError::PostgresError("typname".into()))?
+                .to_string();
+
+            map.insert(oid, type_name);
+        }
+
+        self.pg_oid_type_map = map;
+
+        Ok(())
     }
 
     async fn create_publication(&self) -> DMSRResult<()> {
@@ -168,94 +195,15 @@ impl PostgresSourceConnector {
         lsn: String,
         slot_name: String,
     ) -> DMSRResult<Pin<Box<CopyBothDuplex<Bytes>>>> {
-        let client = self
-            .client
-            .as_mut()
-            .ok_or(MissingValueError::new("Client is not initialized"))?;
-
         let query = format!(
             "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" 'all_tables')",
             slot_name,
             lsn
         );
 
-        let stream = client.copy_both_simple::<Bytes>(&query).await?;
+        let stream = self.client.copy_both_simple::<Bytes>(&query).await?;
         let stream = Box::pin(stream);
 
         Ok(stream)
-    }
-
-    fn process_event(&self, event: &Bytes) -> DMSRResult<Option<JSONChangeEvent>> {
-        let b = &event[25..];
-        let s = std::str::from_utf8(b)?;
-
-        let raw_event: RawPostgresEvent = serde_json::from_str(s)?;
-        if raw_event.action == Action::B || raw_event.action == Action::C {
-            return Ok(None);
-        }
-
-        println!("Parsed raw event: {:?}", raw_event);
-
-        // Get operation
-        let operation = match raw_event.action {
-            Action::I => Operation::Create,
-            Action::U => Operation::Update,
-            Action::D => Operation::Delete,
-            _ => return Ok(None),
-        };
-
-        // Get payload
-        let mut columns: Vec<Column> = vec![];
-        if operation == Operation::Create {
-            columns = raw_event.columns.unwrap_or_default();
-        } else {
-            columns = raw_event.identity.unwrap_or_default();
-        }
-
-        let mut payload: HashMap<String, serde_json::Value> = HashMap::new();
-        let mut fields: Vec<Field> = vec![];
-        for c in columns {
-            let column_name = c.name.clone();
-            payload.insert(c.name, c.value);
-
-            let data_type: DataType = match c.r#type.as_str() {
-                "integer" => DataType::Int32,
-                s if s.starts_with("character varying") => DataType::String,
-                _ => return Ok(None),
-            };
-
-            fields.push(Field {
-                r#type: data_type,
-                optional: false,
-                field: column_name,
-            });
-        }
-
-        let table = raw_event.table.unwrap_or_default();
-        let schema = raw_event.schema.unwrap_or_default();
-        if table.is_empty() || schema.is_empty() {
-            return Ok(None);
-        }
-
-        let pk: Vec<String> = raw_event
-            .pk
-            .unwrap_or_default()
-            .iter()
-            .map(|s| s.name.clone())
-            .collect();
-
-        let json_event = JSONChangeEvent {
-            source_connector: self.connector_name.clone(),
-            schema: Schema {
-                r#type: DataType::Struct,
-                fields,
-            },
-            payload,
-            table: format!("{}.{}", schema, table),
-            op: operation,
-            pk,
-        };
-
-        Ok(Some(json_event))
     }
 }

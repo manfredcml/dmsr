@@ -1,7 +1,6 @@
 use crate::connector::connector::Connector;
 use crate::connector::postgres_sink::config::PostgresSinkConfig;
-use crate::error::generic::{DMSRError, DMSRResult};
-use crate::event::event::{JSONChangeEvent, Operation};
+use crate::error::error::{DMSRError, DMSRResult};
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
 use rdkafka::consumer::Consumer;
@@ -19,7 +18,7 @@ pub struct PostgresSinkConnector {
 impl Connector for PostgresSinkConnector {
     type Config = PostgresSinkConfig;
 
-    fn new(connector_name: String, config: &PostgresSinkConfig) -> DMSRResult<Box<Self>> {
+    async fn new(connector_name: String, config: &PostgresSinkConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(PostgresSinkConnector {
             config: config.clone(),
             client: None,
@@ -27,23 +26,23 @@ impl Connector for PostgresSinkConnector {
         }))
     }
 
-    async fn connect(&mut self) -> DMSRResult<()> {
-        let endpoint = format!(
-            "host={} port={} user={} password={}",
-            self.config.host, self.config.port, self.config.user, self.config.password
-        );
-
-        let (client, connection) = tokio_postgres::connect(endpoint.as_str(), NoTls).await?;
-
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
-
-        self.client = Some(client);
-        Ok(())
-    }
+    // async fn connect(&mut self) -> DMSRResult<()> {
+    //     let endpoint = format!(
+    //         "host={} port={} user={} password={}",
+    //         self.config.host, self.config.port, self.config.user, self.config.password
+    //     );
+    //
+    //     let (client, connection) = tokio_postgres::connect(endpoint.as_str(), NoTls).await?;
+    //
+    //     tokio::spawn(async move {
+    //         if let Err(e) = connection.await {
+    //             eprintln!("connection error: {}", e);
+    //         }
+    //     });
+    //
+    //     self.client = Some(client);
+    //     Ok(())
+    // }
 
     async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
         Ok(())
@@ -94,126 +93,126 @@ impl Connector for PostgresSinkConnector {
     }
 }
 
-impl PostgresSinkConnector {
-    async fn insert(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
-        let client = match self.client.as_mut() {
-            Some(client) => client,
-            None => {
-                return Err(DMSRError::MissingValueError(
-                    "Client is not initialized".into(),
-                ))
-            }
-        };
-
-        let table = event.table;
-
-        let columns: Vec<String> = event
-            .schema
-            .fields
-            .iter()
-            .map(|f| f.field.clone())
-            .collect();
-
-        let values: Vec<String> = columns
-            .iter()
-            .filter_map(|c| event.payload.get(c))
-            .map(|v| v.to_string().replace('"', "'"))
-            .collect();
-
-        let columns = columns.join(",");
-        let values = values.join(",");
-
-        let query = format!("INSERT INTO {} ({}) VALUES ({})", table, columns, values);
-        println!("{}", query);
-
-        client.execute(query.as_str(), &[]).await?;
-
-        Ok(())
-    }
-
-    async fn update(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
-        let client = match self.client.as_mut() {
-            Some(client) => client,
-            None => {
-                return Err(DMSRError::MissingValueError(
-                    "Client is not initialized".into(),
-                ))
-            }
-        };
-
-        let table = event.table;
-
-        let columns: Vec<String> = event
-            .schema
-            .fields
-            .iter()
-            .map(|f| f.field.clone())
-            .collect();
-
-        let values: Vec<String> = columns
-            .iter()
-            .filter_map(|c| event.payload.get(c))
-            .map(|v| v.to_string().replace('"', "'"))
-            .collect();
-
-        let mut query = format!("UPDATE {} SET ", table);
-        query += &columns
-            .iter()
-            .zip(values.iter())
-            .map(|(c, v)| format!("{} = {}", c, v))
-            .collect::<Vec<String>>()
-            .join(",");
-
-        query += " WHERE ";
-
-        let pk_set: HashSet<&String> = event.pk.iter().collect();
-        let pk_value = event
-            .payload
-            .iter()
-            .filter(|(k, _)| pk_set.contains(k))
-            .map(|(k, v)| format!("{} = '{}'", k, v))
-            .collect::<Vec<String>>()
-            .join(" AND ");
-
-        query += &pk_value;
-
-        println!("{}", query);
-
-        client.execute(query.as_str(), &[]).await?;
-
-        Ok(())
-    }
-
-    async fn delete(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
-        let client = match self.client.as_mut() {
-            Some(client) => client,
-            None => {
-                return Err(DMSRError::MissingValueError(
-                    "Client is not initialized".into(),
-                ))
-            }
-        };
-
-        let table = event.table;
-
-        let mut query = format!("DELETE FROM {}", table);
-        query += " WHERE ";
-
-        let pk_set: HashSet<&String> = event.pk.iter().collect();
-        let pk_value = event
-            .payload
-            .iter()
-            .filter(|(k, _)| pk_set.contains(k))
-            .map(|(k, v)| format!("{} = '{}'", k, v))
-            .collect::<Vec<String>>()
-            .join(" AND ");
-
-        query += &pk_value;
-
-        println!("{}", query);
-
-        client.execute(query.as_str(), &[]).await?;
-
-        Ok(())
-    }
-}
+// impl PostgresSinkConnector {
+//     async fn insert(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
+//         let client = match self.client.as_mut() {
+//             Some(client) => client,
+//             None => {
+//                 return Err(DMSRError::MissingValueError(
+//                     "Client is not initialized".into(),
+//                 ))
+//             }
+//         };
+//
+//         let table = event.table;
+//
+//         let columns: Vec<String> = event
+//             .schema
+//             .fields
+//             .iter()
+//             .map(|f| f.field.clone())
+//             .collect();
+//
+//         let values: Vec<String> = columns
+//             .iter()
+//             .filter_map(|c| event.payload.get(c))
+//             .map(|v| v.to_string().replace('"', "'"))
+//             .collect();
+//
+//         let columns = columns.join(",");
+//         let values = values.join(",");
+//
+//         let query = format!("INSERT INTO {} ({}) VALUES ({})", table, columns, values);
+//         println!("{}", query);
+//
+//         client.execute(query.as_str(), &[]).await?;
+//
+//         Ok(())
+//     }
+//
+//     async fn update(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
+//         let client = match self.client.as_mut() {
+//             Some(client) => client,
+//             None => {
+//                 return Err(DMSRError::MissingValueError(
+//                     "Client is not initialized".into(),
+//                 ))
+//             }
+//         };
+//
+//         let table = event.table;
+//
+//         let columns: Vec<String> = event
+//             .schema
+//             .fields
+//             .iter()
+//             .map(|f| f.field.clone())
+//             .collect();
+//
+//         let values: Vec<String> = columns
+//             .iter()
+//             .filter_map(|c| event.payload.get(c))
+//             .map(|v| v.to_string().replace('"', "'"))
+//             .collect();
+//
+//         let mut query = format!("UPDATE {} SET ", table);
+//         query += &columns
+//             .iter()
+//             .zip(values.iter())
+//             .map(|(c, v)| format!("{} = {}", c, v))
+//             .collect::<Vec<String>>()
+//             .join(",");
+//
+//         query += " WHERE ";
+//
+//         let pk_set: HashSet<&String> = event.pk.iter().collect();
+//         let pk_value = event
+//             .payload
+//             .iter()
+//             .filter(|(k, _)| pk_set.contains(k))
+//             .map(|(k, v)| format!("{} = '{}'", k, v))
+//             .collect::<Vec<String>>()
+//             .join(" AND ");
+//
+//         query += &pk_value;
+//
+//         println!("{}", query);
+//
+//         client.execute(query.as_str(), &[]).await?;
+//
+//         Ok(())
+//     }
+//
+//     async fn delete(&mut self, event: JSONChangeEvent) -> DMSRResult<()> {
+//         let client = match self.client.as_mut() {
+//             Some(client) => client,
+//             None => {
+//                 return Err(DMSRError::MissingValueError(
+//                     "Client is not initialized".into(),
+//                 ))
+//             }
+//         };
+//
+//         let table = event.table;
+//
+//         let mut query = format!("DELETE FROM {}", table);
+//         query += " WHERE ";
+//
+//         let pk_set: HashSet<&String> = event.pk.iter().collect();
+//         let pk_value = event
+//             .payload
+//             .iter()
+//             .filter(|(k, _)| pk_set.contains(k))
+//             .map(|(k, v)| format!("{} = '{}'", k, v))
+//             .collect::<Vec<String>>()
+//             .join(" AND ");
+//
+//         query += &pk_value;
+//
+//         println!("{}", query);
+//
+//         client.execute(query.as_str(), &[]).await?;
+//
+//         Ok(())
+//     }
+// }

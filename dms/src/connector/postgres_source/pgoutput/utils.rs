@@ -3,7 +3,7 @@ use crate::connector::postgres_source::pgoutput::events::{
     PgOutputEvent, RelationColumn, RelationEvent, ReplicationIdentity, TruncateEvent,
     TruncateOptionBit, TupleType, UpdateEvent,
 };
-use crate::error::generic::{DMSRError, DMSRResult};
+use crate::error::error::{DMSRError, DMSRResult};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use bytes::Bytes;
 use chrono::{Duration, NaiveDate, NaiveDateTime};

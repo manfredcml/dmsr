@@ -19,7 +19,7 @@ use dms::connector::postgres_sink::config::PostgresSinkConfig;
 use dms::connector::postgres_sink::connector::PostgresSinkConnector;
 use dms::connector::postgres_source::config::PostgresSourceConfig;
 use dms::connector::postgres_source::connector::PostgresSourceConnector;
-use dms::error::generic::{DMSRError, DMSRResult};
+use dms::error::error::{DMSRError, DMSRResult};
 use dms::kafka::config::KafkaConfig;
 use dms::kafka::kafka::Kafka;
 use log::info;
@@ -138,13 +138,12 @@ where
 
     let handle: JoinHandle<DMSRResult<()>> = tokio::spawn(async move {
         let config: ConfigType = serde_json::from_value(connector_config)?;
-        let mut connector = ConnectorType::new(connector_name, &config)?;
 
         info!("Connecting to Kafka...");
         let kafka = Kafka::new(&kafka_config).await?;
 
-        info!("Connecting to Postgres...");
-        connector.connect().await?;
+        info!("Connecting to data source...");
+        let mut connector = ConnectorType::new(connector_name, &config).await?;
 
         info!("Starting stream...");
         connector.stream(kafka).await?;
