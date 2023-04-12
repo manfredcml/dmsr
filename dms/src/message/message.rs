@@ -27,6 +27,18 @@ pub struct Field {
 pub struct Payload {
     pub before: Option<serde_json::Value>,
     pub after: Option<serde_json::Value>,
-    pub op: String,
+    pub op: Operation,
     pub ts_ms: i64,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+pub enum Operation {
+    #[serde(rename = "c")]
+    Create,
+    #[serde(rename = "u")]
+    Update,
+    #[serde(rename = "d")]
+    Delete,
+    #[serde(rename = "t")]
+    Truncate,
 }

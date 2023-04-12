@@ -7,7 +7,7 @@ use crate::connector::postgres_source::pgoutput::events::{
 use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
 use crate::error::error::{DMSRError, DMSRResult};
 use crate::kafka::kafka::Kafka;
-use crate::message::message::{Field, KafkaMessage, Payload, Schema};
+use crate::message::message::{Field, KafkaMessage, Operation, Payload, Schema};
 use crate::message::postgres_types::PostgresKafkaConnectTypeMap;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -315,7 +315,7 @@ impl PostgresSourceConnector {
         let payload = Payload {
             before: None,
             after: Some(db_values),
-            op: "c".to_string(),
+            op: Operation::Create,
             ts_ms: event.timestamp.timestamp_millis(),
         };
 
@@ -330,7 +330,7 @@ impl PostgresSourceConnector {
         let payload = Payload {
             before: None,
             after: Some(db_values),
-            op: "u".to_string(),
+            op: Operation::Update,
             ts_ms: event.timestamp.timestamp_millis(),
         };
 
@@ -345,7 +345,7 @@ impl PostgresSourceConnector {
         let payload = Payload {
             before: Some(db_values),
             after: None,
-            op: "d".to_string(),
+            op: Operation::Delete,
             ts_ms: event.timestamp.timestamp_millis(),
         };
 
@@ -362,7 +362,7 @@ impl PostgresSourceConnector {
         let payload = Payload {
             before: None,
             after: None,
-            op: "t".to_string(),
+            op: Operation::Truncate,
             ts_ms: event.timestamp.timestamp_millis(),
         };
 
