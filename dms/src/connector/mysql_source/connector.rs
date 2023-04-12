@@ -53,7 +53,7 @@ impl Connector for MySQLSourceConnector {
     //     Ok(())
     // }
 
-    async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
+    async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()> {
         let stream = match self.stream.as_mut() {
             Some(stream) => stream,
             None => {

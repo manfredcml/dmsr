@@ -40,7 +40,7 @@ impl Kafka {
         })
     }
 
-    pub async fn create_config_topic(&mut self) -> DMSRResult<()> {
+    pub async fn create_config_topic(&self) -> DMSRResult<()> {
         let topic_name = &self.config.config_topic;
         let topic = rdkafka::admin::NewTopic::new(topic_name, 1, TopicReplication::Fixed(1))
             .set("cleanup.policy", "compact");
@@ -52,14 +52,12 @@ impl Kafka {
     }
 
     pub async fn ingest(
-        &mut self,
+        &self,
         topic: String,
-        message: KafkaMessage,
+        message: &KafkaMessage,
         key: Option<String>,
     ) -> DMSRResult<()> {
-        let message = serde_json::to_string(&message)?;
-
-        println!("Kafka message: {}", message);
+        let message = serde_json::to_string(message)?;
 
         let mut record =
             rdkafka::producer::FutureRecord::to(topic.as_str()).payload(message.as_str());

@@ -2,7 +2,7 @@ use crate::connector::connector::Connector;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
 use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
 use crate::connector::postgres_source::pgoutput::events::{
-    InsertEvent, PgOutputEvent, RelationEvent,
+    ColumnData, InsertEvent, PgOutputEvent, RelationColumn, RelationEvent,
 };
 use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
 use crate::error::error::{DMSRError, DMSRResult};
@@ -12,6 +12,7 @@ use crate::message::postgres_types::PostgresKafkaConnectTypeMap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
+use mysql_common::frunk::labelled::chars::F;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::os::unix::raw::ino_t;
@@ -43,7 +44,7 @@ impl Connector for PostgresSourceConnector {
         }))
     }
 
-    async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
+    async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()> {
         self.get_oid_type_map().await?;
         self.create_publication().await?;
         let (lsn, slot_name) = self.create_replication_slot().await?;
@@ -73,7 +74,7 @@ impl Connector for PostgresSourceConnector {
                         }
                         PgOutputEvent::Insert(event) => {
                             println!("Insert: {:?}", event);
-                            self.process_insert_event(event, &mut kafka).await?;
+                            self.process_insert_event(event, kafka).await?;
                         }
                         PgOutputEvent::Update(event) => {
                             println!("Update: {:?}", event);
@@ -207,15 +208,8 @@ impl PostgresSourceConnector {
         Ok(stream)
     }
 
-    async fn process_insert_event(&self, event: InsertEvent, kafka: &mut Kafka) -> DMSRResult<()> {
-        let relation_id = event.relation_id;
-        let relation_event = self
-            .relation_map
-            .get(&relation_id)
-            .ok_or(DMSRError::PostgresError("Relation not found".into()))?;
-        let columns = &relation_event.columns;
-
-        let fields = columns
+    fn get_field_schema_from_relation(&self, columns: &Vec<RelationColumn>) -> Vec<Field> {
+        columns
             .iter()
             .map(|c| {
                 let pg_col_type = self.pg_oid_type_map.get(&c.column_type);
@@ -231,54 +225,98 @@ impl PostgresSourceConnector {
                     fields: None,
                 }
             })
-            .collect::<Vec<Field>>();
+            .collect::<Vec<Field>>()
+    }
 
+    fn get_field_values(&self, fields: &Vec<Field>, columns: &Vec<ColumnData>) -> Value {
         let mut values: Value = json!({});
 
-        for (f, c) in fields.iter().zip(event.columns.iter()) {
+        for (f, c) in fields.iter().zip(columns.iter()) {
             let field_name = f.field.clone();
             let field_value = c.column_value.clone();
             values[field_name] = json!(field_value);
         }
 
+        values
+    }
+
+    fn get_relation_event(&self, relation_id: u32) -> DMSRResult<&RelationEvent> {
+        self.relation_map
+            .get(&relation_id)
+            .ok_or(DMSRError::PostgresError("Relation not found".into()))
+    }
+
+    fn get_default_fields(&self, db_fields: &Vec<Field>) -> Vec<Field> {
         let before = Field {
             r#type: "struct".into(),
             optional: true,
             field: "before".into(),
-            fields: Some(fields.clone()),
+            fields: Some(db_fields.clone()),
         };
 
         let after = Field {
             r#type: "struct".into(),
             optional: true,
             field: "after".into(),
-            fields: Some(fields),
+            fields: Some(db_fields.clone()),
         };
 
+        let op = Field {
+            r#type: "string".into(),
+            optional: false,
+            field: "op".into(),
+            fields: None,
+        };
+
+        let ts_ms = Field {
+            r#type: "int64".into(),
+            optional: true,
+            field: "ts_ms".into(),
+            fields: None,
+        };
+
+        vec![before, after, op, ts_ms]
+    }
+
+    fn get_schema(&self, relation_event: &RelationEvent, default_fields: &[Field]) -> Schema {
         let schema_name = format!(
             "{}.{}",
             &relation_event.namespace, &relation_event.relation_name
         );
 
-        let schema = Schema {
+        Schema {
             r#type: "struct".to_string(),
-            fields: vec![before, after],
+            fields: default_fields.to_vec(),
             optional: false,
             name: schema_name,
-        };
+        }
+    }
+
+    async fn process_insert_event(&self, event: InsertEvent, kafka: &Kafka) -> DMSRResult<()> {
+        let relation_id = event.relation_id;
+        let relation_event = self.get_relation_event(relation_id)?;
+
+        let db_fields = self.get_field_schema_from_relation(&relation_event.columns);
+        let db_values = self.get_field_values(&db_fields, &event.columns);
+
+        let default_fields = self.get_default_fields(&db_fields);
+
+        let schema = self.get_schema(relation_event, &default_fields);
 
         let payload = Payload {
             before: None,
-            after: Some(values),
+            after: Some(db_values),
             op: "c".to_string(),
             ts_ms: event.timestamp.timestamp_millis(),
         };
 
-        let kafka_event = KafkaMessage { schema, payload };
+        let kafka_message = KafkaMessage { schema, payload };
 
-        let serialized = serde_json::to_string(&kafka_event)?;
+        kafka
+            .ingest("test-topic".to_string(), &kafka_message, None)
+            .await?;
 
-        println!("{:?}", serialized);
+        println!("{:?}", kafka_message);
 
         Ok(())
     }

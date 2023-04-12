@@ -44,7 +44,7 @@ impl Connector for PostgresSinkConnector {
     //     Ok(())
     // }
 
-    async fn stream(&mut self, mut kafka: Kafka) -> DMSRResult<()> {
+    async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()> {
         Ok(())
         // println!("Starting stream for connector: {}", self.connector_name);
         // let consumer = match &mut kafka.consumer {

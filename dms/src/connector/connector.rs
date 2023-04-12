@@ -10,5 +10,5 @@ pub trait Connector {
     where
         Self: Sized;
 
-    async fn stream(&mut self, kafka: Kafka) -> DMSRResult<()>;
+    async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()>;
 }
