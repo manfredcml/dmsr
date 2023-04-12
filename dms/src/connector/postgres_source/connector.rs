@@ -12,7 +12,9 @@ use crate::message::postgres_types::PostgresKafkaConnectTypeMap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
+use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::os::unix::raw::ino_t;
 use std::pin::Pin;
 use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
 
@@ -226,24 +228,35 @@ impl PostgresSourceConnector {
                     r#type: col_type,
                     optional: !c.is_pk,
                     field: c.column_name.clone(),
-                    name: None,
                     fields: None,
                 }
             })
             .collect::<Vec<Field>>();
 
+        let mut values: Value = json!({});
+
+        for (f, c) in fields.iter().zip(event.columns.iter()) {
+            let field_name = f.field.clone();
+            let field_value = c.column_value.clone();
+            values[field_name] = json!(field_value);
+        }
+
         let before = Field {
             r#type: "struct".into(),
             optional: true,
             field: "before".into(),
-            name: None,
+            fields: Some(fields.clone()),
+        };
+
+        let after = Field {
+            r#type: "struct".into(),
+            optional: true,
+            field: "after".into(),
             fields: Some(fields),
         };
 
-        let after = before.clone();
-
         let schema_name = format!(
-            "{}.{}.Envelope",
+            "{}.{}",
             &relation_event.namespace, &relation_event.relation_name
         );
 
@@ -256,13 +269,16 @@ impl PostgresSourceConnector {
 
         let payload = Payload {
             before: None,
-            after: None,
-            op: "".to_string(),
-            ts_ms: 0,
+            after: Some(values),
+            op: "c".to_string(),
+            ts_ms: event.timestamp.timestamp_millis(),
         };
 
-        let kafka_message = KafkaMessage { schema, payload };
-        kafka.ingest(kafka_message).await?;
+        let kafka_event = KafkaMessage { schema, payload };
+
+        let serialized = serde_json::to_string(&kafka_event)?;
+
+        println!("{:?}", serialized);
 
         Ok(())
     }
