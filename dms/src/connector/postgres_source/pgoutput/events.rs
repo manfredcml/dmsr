@@ -57,7 +57,6 @@ pub struct InsertEvent {
 pub struct UpdateEvent {
     pub timestamp: NaiveDateTime,
     pub lsn: u64,
-    pub tx_id: u32,
     pub relation_id: u32,
     pub tuple_type: TupleType,
     pub num_columns: u16,

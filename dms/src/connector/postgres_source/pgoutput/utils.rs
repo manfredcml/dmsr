@@ -190,7 +190,6 @@ pub fn parse_update_event(
     lsn: u64,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
-    let tx_id = cursor.read_u32::<BigEndian>()?;
     let relation_id = cursor.read_u32::<BigEndian>()?;
 
     let tuple_type = parse_u8_into_enum::<TupleType>(cursor.read_u8()?)?;
@@ -215,7 +214,6 @@ pub fn parse_update_event(
     let pgoutput = UpdateEvent {
         timestamp,
         lsn,
-        tx_id,
         relation_id,
         tuple_type,
         num_columns,

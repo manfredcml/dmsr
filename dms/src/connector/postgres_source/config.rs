@@ -5,5 +5,6 @@ pub struct PostgresSourceConfig {
     pub host: String,
     pub port: u16,
     pub user: String,
+    pub db: String,
     pub password: String,
 }

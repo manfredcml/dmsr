@@ -111,8 +111,8 @@ impl Connector for PostgresSourceConnector {
 impl PostgresSourceConnector {
     async fn connect(config: &PostgresSourceConfig) -> DMSRResult<Client> {
         let endpoint = format!(
-            "host={} port={} user={} password={} replication=database",
-            config.host, config.port, config.user, config.password
+            "host={} port={} user={} password={} dbname={} replication=database",
+            config.host, config.port, config.user, config.password, config.db
         );
 
         let (client, connection) = tokio_postgres::connect(endpoint.as_str(), NoTls).await?;
@@ -208,7 +208,7 @@ impl PostgresSourceConnector {
     ) -> DMSRResult<Pin<Box<CopyBothDuplex<Bytes>>>> {
         let pub_name = format!("dmsr_pub_all_tables_{}", self.connector_name);
         let query = format!(
-            "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '2', \"publication_names\" '{}')",
+            "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" '{}')",
             slot_name,
             lsn,
             pub_name
@@ -263,7 +263,7 @@ impl PostgresSourceConnector {
 
         let db_fields = self.get_db_fields(&relation_event.columns);
         let default_fields = self.get_default_fields(&db_fields);
-        let msg_schema = self.get_schema(relation_event, &default_fields);
+        let msg_schema = self.get_message_schema(relation_event, &default_fields);
         let schema_name = relation_event.namespace.clone();
         let table_name = relation_event.relation_name.clone();
         Ok((msg_schema, db_fields, schema_name, table_name))
@@ -301,7 +301,11 @@ impl PostgresSourceConnector {
         vec![before, after, op, ts_ms]
     }
 
-    fn get_schema(&self, relation_event: &RelationEvent, default_fields: &[Field]) -> Schema {
+    fn get_message_schema(
+        &self,
+        relation_event: &RelationEvent,
+        default_fields: &[Field],
+    ) -> Schema {
         let schema_name = format!(
             "{}.{}",
             &relation_event.namespace, &relation_event.relation_name
@@ -312,6 +316,24 @@ impl PostgresSourceConnector {
             fields: default_fields.to_vec(),
             optional: false,
             name: schema_name,
+        }
+    }
+
+    fn get_message_source(
+        &self,
+        lsn: u64,
+        schema_name: String,
+        table_name: String,
+        tx_id: u32,
+    ) -> PostgresSource {
+        PostgresSource {
+            connector_type: ConnectorKind::PostgresSource,
+            connector_name: self.connector_name.clone(),
+            lsn,
+            db: self.config.db.clone(),
+            schema: schema_name,
+            table: table_name,
+            tx_id,
         }
     }
 
@@ -330,16 +352,7 @@ impl PostgresSourceConnector {
         let (schema, db_fields, schema_name, table_name) =
             self.extract_meta_from_relation_id(relation_id)?;
         let db_values = self.get_field_values(&db_fields, &event.columns);
-
-        let source = PostgresSource {
-            connector_type: ConnectorKind::PostgresSource,
-            connector_name: self.connector_name.clone(),
-            lsn: event.lsn,
-            db: "placeholder".into(),
-            schema: schema_name,
-            table: table_name,
-            tx_id,
-        };
+        let source = self.get_message_source(event.lsn, schema_name, table_name, tx_id);
 
         let payload = Payload {
             before: None,
@@ -363,15 +376,7 @@ impl PostgresSourceConnector {
             self.extract_meta_from_relation_id(relation_id)?;
         let db_values = self.get_field_values(&db_fields, &event.columns);
 
-        let source = PostgresSource {
-            connector_type: ConnectorKind::PostgresSource,
-            connector_name: self.connector_name.clone(),
-            lsn: event.lsn,
-            db: "placeholder".into(),
-            schema: schema_name,
-            table: table_name,
-            tx_id,
-        };
+        let source = self.get_message_source(event.lsn, schema_name, table_name, tx_id);
 
         let payload = Payload {
             before: None,
@@ -395,15 +400,7 @@ impl PostgresSourceConnector {
             self.extract_meta_from_relation_id(relation_id)?;
         let db_values = self.get_field_values(&db_fields, &event.columns);
 
-        let source = PostgresSource {
-            connector_type: ConnectorKind::PostgresSource,
-            connector_name: self.connector_name.clone(),
-            lsn: event.lsn,
-            db: "placeholder".into(),
-            schema: schema_name,
-            table: table_name,
-            tx_id,
-        };
+        let source = self.get_message_source(event.lsn, schema_name, table_name, tx_id);
 
         let payload = Payload {
             before: Some(db_values),
@@ -427,15 +424,7 @@ impl PostgresSourceConnector {
             let (schema, _, schema_name, table_name) =
                 self.extract_meta_from_relation_id(*relation_id)?.clone();
 
-            let source = PostgresSource {
-                connector_type: ConnectorKind::PostgresSource,
-                connector_name: self.connector_name.clone(),
-                lsn: event.lsn,
-                db: "placeholder".into(),
-                schema: schema_name.clone(),
-                table: table_name.clone(),
-                tx_id,
-            };
+            let source = self.get_message_source(event.lsn, schema_name, table_name, tx_id);
 
             let payload: Payload<PostgresSource> = Payload {
                 before: None,
