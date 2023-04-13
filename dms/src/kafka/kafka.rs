@@ -51,12 +51,12 @@ impl Kafka {
         Ok(())
     }
 
-    pub async fn ingest(
+    pub async fn ingest<Source>(
         &self,
         topic: String,
-        message: &KafkaMessage,
+        message: &KafkaMessage<Source>,
         key: Option<String>,
-    ) -> DMSRResult<()> {
+    ) -> DMSRResult<()> where Source: serde::Serialize + serde::de::DeserializeOwned {
         let message = serde_json::to_string(message)?;
 
         let mut record =

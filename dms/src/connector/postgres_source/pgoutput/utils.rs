@@ -84,24 +84,28 @@ fn read_columns(num_columns: u16, cursor: &mut Cursor<&[u8]>) -> DMSRResult<Vec<
 }
 
 pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
+    println!("parse_pgoutput_event begins");
+    println!("raw event: {:?}", event);
     let mut cursor = Cursor::new(event);
 
     // Skip the 'w' identifier (first byte) and the lsn info (next 16 bytes)
     // The lsn info will be captured by Begin and Commit info
-    cursor.set_position(17);
+    cursor.set_position(9);
+    let lsn = cursor.read_u64::<BigEndian>()?;
 
     let ms_since_2000 = cursor.read_i64::<BigEndian>()?;
     let timestamp = parse_timestamp(ms_since_2000);
 
     let message_type = parse_u8_into_enum::<MessageType>(cursor.read_u8()?)?;
+    println!("message_type: {:?}", message_type);
 
     match message_type {
         MessageType::Relation => {
-            let pgoutput = parse_relation_event(timestamp, &mut cursor)?;
+            let pgoutput = parse_relation_event(timestamp, lsn, &mut cursor)?;
             Ok(pgoutput)
         }
         MessageType::Insert => {
-            let pgoutput = parse_insert_event(timestamp, &mut cursor)?;
+            let pgoutput = parse_insert_event(timestamp, lsn, &mut cursor)?;
             Ok(pgoutput)
         }
         MessageType::Begin => {
@@ -113,15 +117,15 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
             Ok(pgoutput)
         }
         MessageType::Update => {
-            let pgoutput = parse_update_event(timestamp, &mut cursor)?;
+            let pgoutput = parse_update_event(timestamp, lsn, &mut cursor)?;
             Ok(pgoutput)
         }
         MessageType::Delete => {
-            let pgoutput = parse_delete_event(timestamp, &mut cursor)?;
+            let pgoutput = parse_delete_event(timestamp, lsn, &mut cursor)?;
             Ok(pgoutput)
         }
         MessageType::Truncate => {
-            let pgoutput = parse_truncate_event(timestamp, &mut cursor)?;
+            let pgoutput = parse_truncate_event(timestamp, lsn, &mut cursor)?;
             Ok(pgoutput)
         }
         MessageType::Origin => Ok(PgOutputEvent::Origin),
@@ -130,6 +134,7 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
 
 pub fn parse_truncate_event(
     timestamp: NaiveDateTime,
+    lsn: u64,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
     let num_relations = cursor.read_u32::<BigEndian>()?;
@@ -142,6 +147,7 @@ pub fn parse_truncate_event(
 
     let pgoutput = TruncateEvent {
         timestamp,
+        lsn,
         option_bits,
         num_relations,
         relation_ids,
@@ -152,6 +158,7 @@ pub fn parse_truncate_event(
 
 pub fn parse_delete_event(
     timestamp: NaiveDateTime,
+    lsn: u64,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
     let relation_id = cursor.read_u32::<BigEndian>()?;
@@ -168,6 +175,7 @@ pub fn parse_delete_event(
 
     let pgoutput = DeleteEvent {
         timestamp,
+        lsn,
         tuple_type,
         relation_id,
         columns,
@@ -179,8 +187,10 @@ pub fn parse_delete_event(
 
 pub fn parse_update_event(
     timestamp: NaiveDateTime,
+    lsn: u64,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
+    let tx_id = cursor.read_u32::<BigEndian>()?;
     let relation_id = cursor.read_u32::<BigEndian>()?;
 
     let tuple_type = parse_u8_into_enum::<TupleType>(cursor.read_u8()?)?;
@@ -204,6 +214,8 @@ pub fn parse_update_event(
 
     let pgoutput = UpdateEvent {
         timestamp,
+        lsn,
+        tx_id,
         relation_id,
         tuple_type,
         num_columns,
@@ -255,6 +267,7 @@ pub fn parse_begin_event(
 
 pub fn parse_relation_event(
     timestamp: NaiveDateTime,
+    lsn: u64,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
     let namespace_oid = cursor.read_u32::<BigEndian>()?;
@@ -283,6 +296,7 @@ pub fn parse_relation_event(
 
     let pgoutput = RelationEvent {
         timestamp,
+        lsn,
         relation_id: namespace_oid,
         namespace: schema_name,
         relation_name: table_name,
@@ -296,17 +310,23 @@ pub fn parse_relation_event(
 
 pub fn parse_insert_event(
     timestamp: NaiveDateTime,
+    lsn: u64,
     cursor: &mut Cursor<&[u8]>,
 ) -> DMSRResult<PgOutputEvent> {
     let relation_id = cursor.read_u32::<BigEndian>()?;
+    println!("relation_id: {}", relation_id);
 
     let tuple_type = parse_u8_into_enum::<TupleType>(cursor.read_u8()?)?;
+    println!("tuple_type: {:?}", tuple_type);
 
     let num_columns = cursor.read_u16::<BigEndian>()?;
+    println!("num_columns: {}", num_columns);
+
     let columns = read_columns(num_columns, cursor)?;
 
     let pgoutput = InsertEvent {
         timestamp,
+        lsn,
         relation_id,
         tuple_type,
         num_columns,

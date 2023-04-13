@@ -17,6 +17,7 @@ pub enum PgOutputEvent {
 #[derive(Debug)]
 pub struct RelationEvent {
     pub timestamp: NaiveDateTime,
+    pub lsn: u64,
     pub relation_id: u32,
     pub namespace: String,
     pub relation_name: String,
@@ -45,6 +46,7 @@ pub struct CommitEvent {
 #[derive(Debug)]
 pub struct InsertEvent {
     pub timestamp: NaiveDateTime,
+    pub lsn: u64,
     pub relation_id: u32,
     pub tuple_type: TupleType,
     pub num_columns: u16,
@@ -54,6 +56,8 @@ pub struct InsertEvent {
 #[derive(Debug)]
 pub struct UpdateEvent {
     pub timestamp: NaiveDateTime,
+    pub lsn: u64,
+    pub tx_id: u32,
     pub relation_id: u32,
     pub tuple_type: TupleType,
     pub num_columns: u16,
@@ -63,6 +67,7 @@ pub struct UpdateEvent {
 #[derive(Debug)]
 pub struct DeleteEvent {
     pub timestamp: NaiveDateTime,
+    pub lsn: u64,
     pub relation_id: u32,
     pub tuple_type: TupleType,
     pub num_columns: u16,
@@ -72,6 +77,7 @@ pub struct DeleteEvent {
 #[derive(Debug)]
 pub struct TruncateEvent {
     pub timestamp: NaiveDateTime,
+    pub lsn: u64,
     pub num_relations: u32,
     pub option_bits: TruncateOptionBit,
     pub relation_ids: Vec<u32>,

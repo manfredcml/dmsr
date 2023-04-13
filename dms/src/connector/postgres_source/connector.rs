@@ -1,4 +1,5 @@
 use crate::connector::connector::Connector;
+use crate::connector::kind::ConnectorKind;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
 use crate::connector::postgres_source::pgoutput::events::{
     ColumnData, DeleteEvent, InsertEvent, PgOutputEvent, RelationColumn, RelationEvent,
@@ -7,7 +8,7 @@ use crate::connector::postgres_source::pgoutput::events::{
 use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
 use crate::error::error::{DMSRError, DMSRResult};
 use crate::kafka::kafka::Kafka;
-use crate::message::message::{Field, KafkaMessage, Operation, Payload, Schema};
+use crate::message::message::{Field, KafkaMessage, Operation, Payload, PostgresSource, Schema};
 use crate::message::postgres_types::PostgresKafkaConnectTypeMap;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -21,7 +22,7 @@ pub struct PostgresSourceConnector {
     config: PostgresSourceConfig,
     client: Client,
     connector_name: String,
-    relation_map: HashMap<u32, (Schema, Vec<Field>)>,
+    relation_map: HashMap<u32, RelationEvent>,
     pg_oid_type_map: HashMap<u32, String>,
     pg_kafka_connect_type_map: PostgresKafkaConnectTypeMap,
 }
@@ -48,6 +49,7 @@ impl Connector for PostgresSourceConnector {
         let (lsn, slot_name) = self.create_replication_slot().await?;
         let mut stream = self.start_replication_slot(lsn, slot_name).await?;
 
+        let mut tx_id: Option<u32> = None;
         while let Some(event) = stream.next().await {
             let event = event?;
             let event = event.as_ref();
@@ -58,14 +60,16 @@ impl Connector for PostgresSourceConnector {
                 }
                 b'w' => {
                     let pg_output_event = parse_pgoutput_event(event)?;
-                    let mut kafka_message: Vec<KafkaMessage> = vec![];
+                    let mut kafka_message: Vec<KafkaMessage<PostgresSource>> = vec![];
 
                     match pg_output_event {
                         PgOutputEvent::Begin(event) => {
                             println!("Begin: {:?}", event);
+                            tx_id = Some(event.tx_xid);
                         }
                         PgOutputEvent::Commit(event) => {
                             println!("Commit: {:?}", event);
+                            tx_id = None;
                         }
                         PgOutputEvent::Relation(event) => {
                             println!("Relation: {:?}", event);
@@ -73,19 +77,19 @@ impl Connector for PostgresSourceConnector {
                         }
                         PgOutputEvent::Insert(event) => {
                             println!("Insert: {:?}", event);
-                            kafka_message = self.process_insert_event(event).await?;
+                            kafka_message = self.process_insert_event(event, tx_id).await?;
                         }
                         PgOutputEvent::Update(event) => {
                             println!("Update: {:?}", event);
-                            kafka_message = self.process_update_event(event).await?;
+                            kafka_message = self.process_update_event(event, tx_id).await?;
                         }
                         PgOutputEvent::Delete(event) => {
                             println!("Delete: {:?}", event);
-                            kafka_message = self.process_delete_event(event).await?;
+                            kafka_message = self.process_delete_event(event, tx_id).await?;
                         }
                         PgOutputEvent::Truncate(event) => {
                             println!("Truncate: {:?}", event);
-                            kafka_message = self.process_truncate_event(event).await?;
+                            kafka_message = self.process_truncate_event(event, tx_id).await?;
                         }
                         PgOutputEvent::Origin => {}
                     }
@@ -202,10 +206,12 @@ impl PostgresSourceConnector {
         lsn: String,
         slot_name: String,
     ) -> DMSRResult<Pin<Box<CopyBothDuplex<Bytes>>>> {
+        let pub_name = format!("dmsr_pub_all_tables_{}", self.connector_name);
         let query = format!(
-            "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" 'all_tables')",
+            "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '2', \"publication_names\" '{}')",
             slot_name,
-            lsn
+            lsn,
+            pub_name
         );
 
         let stream = self.client.copy_both_simple::<Bytes>(&query).await?;
@@ -246,10 +252,21 @@ impl PostgresSourceConnector {
         values
     }
 
-    fn get_schema_from_relation_id(&self, relation_id: u32) -> DMSRResult<&(Schema, Vec<Field>)> {
-        self.relation_map
+    fn extract_meta_from_relation_id(
+        &self,
+        relation_id: u32,
+    ) -> DMSRResult<(Schema, Vec<Field>, String, String)> {
+        let relation_event = self
+            .relation_map
             .get(&relation_id)
-            .ok_or(DMSRError::PostgresError("Relation not found".into()))
+            .ok_or(DMSRError::PostgresError("Relation not found".into()))?;
+
+        let db_fields = self.get_db_fields(&relation_event.columns);
+        let default_fields = self.get_default_fields(&db_fields);
+        let msg_schema = self.get_schema(relation_event, &default_fields);
+        let schema_name = relation_event.namespace.clone();
+        let table_name = relation_event.relation_name.clone();
+        Ok((msg_schema, db_fields, schema_name, table_name))
     }
 
     fn get_default_fields(&self, db_fields: &[Field]) -> Vec<Field> {
@@ -299,80 +316,137 @@ impl PostgresSourceConnector {
     }
 
     async fn process_relation_event(&mut self, event: RelationEvent) -> DMSRResult<()> {
-        let db_fields = self.get_db_fields(&event.columns);
-        let default_fields = self.get_default_fields(&db_fields);
-        let schema = self.get_schema(&event, &default_fields);
-        self.relation_map
-            .insert(event.relation_id, (schema, db_fields));
+        self.relation_map.insert(event.relation_id, event);
         Ok(())
     }
 
-    async fn process_insert_event(&self, event: InsertEvent) -> DMSRResult<Vec<KafkaMessage>> {
+    async fn process_insert_event(
+        &self,
+        event: InsertEvent,
+        tx_id: Option<u32>,
+    ) -> DMSRResult<Vec<KafkaMessage<PostgresSource>>> {
+        let tx_id = tx_id.ok_or(DMSRError::PostgresError("No transaction id".into()))?;
         let relation_id = event.relation_id;
-        let (schema, db_fields) = self.get_schema_from_relation_id(relation_id)?.clone();
+        let (schema, db_fields, schema_name, table_name) =
+            self.extract_meta_from_relation_id(relation_id)?;
         let db_values = self.get_field_values(&db_fields, &event.columns);
+
+        let source = PostgresSource {
+            connector_type: ConnectorKind::PostgresSource,
+            connector_name: self.connector_name.clone(),
+            lsn: event.lsn,
+            db: "placeholder".into(),
+            schema: schema_name,
+            table: table_name,
+            tx_id,
+        };
 
         let payload = Payload {
             before: None,
             after: Some(db_values),
             op: Operation::Create,
             ts_ms: event.timestamp.timestamp_millis(),
+            source,
         };
 
         Ok(vec![KafkaMessage { schema, payload }])
     }
 
-    async fn process_update_event(&self, event: UpdateEvent) -> DMSRResult<Vec<KafkaMessage>> {
+    async fn process_update_event(
+        &self,
+        event: UpdateEvent,
+        tx_id: Option<u32>,
+    ) -> DMSRResult<Vec<KafkaMessage<PostgresSource>>> {
+        let tx_id = tx_id.ok_or(DMSRError::PostgresError("No transaction id".into()))?;
         let relation_id = event.relation_id;
-        let (schema, db_fields) = self.get_schema_from_relation_id(relation_id)?.clone();
+        let (schema, db_fields, schema_name, table_name) =
+            self.extract_meta_from_relation_id(relation_id)?;
         let db_values = self.get_field_values(&db_fields, &event.columns);
+
+        let source = PostgresSource {
+            connector_type: ConnectorKind::PostgresSource,
+            connector_name: self.connector_name.clone(),
+            lsn: event.lsn,
+            db: "placeholder".into(),
+            schema: schema_name,
+            table: table_name,
+            tx_id,
+        };
 
         let payload = Payload {
             before: None,
             after: Some(db_values),
             op: Operation::Update,
             ts_ms: event.timestamp.timestamp_millis(),
+            source,
         };
 
         Ok(vec![KafkaMessage { schema, payload }])
     }
 
-    async fn process_delete_event(&self, event: DeleteEvent) -> DMSRResult<Vec<KafkaMessage>> {
+    async fn process_delete_event(
+        &self,
+        event: DeleteEvent,
+        tx_id: Option<u32>,
+    ) -> DMSRResult<Vec<KafkaMessage<PostgresSource>>> {
+        let tx_id = tx_id.ok_or(DMSRError::PostgresError("No transaction id".into()))?;
         let relation_id = event.relation_id;
-        let (schema, db_fields) = self.get_schema_from_relation_id(relation_id)?.clone();
+        let (schema, db_fields, schema_name, table_name) =
+            self.extract_meta_from_relation_id(relation_id)?;
         let db_values = self.get_field_values(&db_fields, &event.columns);
+
+        let source = PostgresSource {
+            connector_type: ConnectorKind::PostgresSource,
+            connector_name: self.connector_name.clone(),
+            lsn: event.lsn,
+            db: "placeholder".into(),
+            schema: schema_name,
+            table: table_name,
+            tx_id,
+        };
 
         let payload = Payload {
             before: Some(db_values),
             after: None,
             op: Operation::Delete,
             ts_ms: event.timestamp.timestamp_millis(),
+            source,
         };
 
         Ok(vec![KafkaMessage { schema, payload }])
     }
 
-    async fn process_truncate_event(&self, event: TruncateEvent) -> DMSRResult<Vec<KafkaMessage>> {
-        let mut schemas: Vec<Schema> = vec![];
+    async fn process_truncate_event(
+        &self,
+        event: TruncateEvent,
+        tx_id: Option<u32>,
+    ) -> DMSRResult<Vec<KafkaMessage<PostgresSource>>> {
+        let tx_id = tx_id.ok_or(DMSRError::PostgresError("No transaction id".into()))?;
+        let mut messages: Vec<KafkaMessage<PostgresSource>> = vec![];
         for relation_id in event.relation_ids.iter() {
-            let (schema, _) = self.get_schema_from_relation_id(*relation_id)?.clone();
-            schemas.push(schema);
+            let (schema, _, schema_name, table_name) =
+                self.extract_meta_from_relation_id(*relation_id)?.clone();
+
+            let source = PostgresSource {
+                connector_type: ConnectorKind::PostgresSource,
+                connector_name: self.connector_name.clone(),
+                lsn: event.lsn,
+                db: "placeholder".into(),
+                schema: schema_name.clone(),
+                table: table_name.clone(),
+                tx_id,
+            };
+
+            let payload: Payload<PostgresSource> = Payload {
+                before: None,
+                after: None,
+                op: Operation::Truncate,
+                ts_ms: event.timestamp.timestamp_millis(),
+                source,
+            };
+
+            messages.push(KafkaMessage { schema, payload });
         }
-
-        let payload = Payload {
-            before: None,
-            after: None,
-            op: Operation::Truncate,
-            ts_ms: event.timestamp.timestamp_millis(),
-        };
-
-        let messages = schemas
-            .iter()
-            .map(|s| KafkaMessage {
-                schema: s.clone(),
-                payload: payload.clone(),
-            })
-            .collect::<Vec<KafkaMessage>>();
 
         Ok(messages)
     }

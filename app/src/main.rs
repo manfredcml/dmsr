@@ -83,6 +83,7 @@ async fn subscribe_to_config_topic(
         let payload = String::from_utf8(payload.to_vec())?;
 
         let connector_name = String::from_utf8(key.to_vec())?;
+        println!("Connector name: {}", connector_name);
         let connector_config: ConnectorConfig = serde_json::from_str(&payload)?;
         let connector_type = connector_config.connector_type;
         let connector_config = connector_config.config;
