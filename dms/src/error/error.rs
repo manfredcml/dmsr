@@ -22,6 +22,18 @@ pub enum DMSRError {
     ParseIntError(String),
 }
 
+impl From<mysql_async::binlog::events::BadColumnType> for DMSRError {
+    fn from(error: mysql_async::binlog::events::BadColumnType) -> Self {
+        DMSRError::MySQLError(error.to_string())
+    }
+}
+
+impl From<mysql_async::binlog::UnknownEventType> for DMSRError {
+    fn from(error: mysql_async::binlog::UnknownEventType) -> Self {
+        DMSRError::MySQLError(error.to_string())
+    }
+}
+
 impl From<std::num::ParseIntError> for DMSRError {
     fn from(error: std::num::ParseIntError) -> Self {
         DMSRError::ParseIntError(error.to_string())
