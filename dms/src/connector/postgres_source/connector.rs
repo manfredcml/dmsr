@@ -298,7 +298,57 @@ impl PostgresSourceConnector {
             fields: None,
         };
 
-        vec![before, after, op, ts_ms]
+        let source = Field {
+            r#type: "struct".into(),
+            optional: false,
+            field: "source".into(),
+            fields: Some(vec![
+                Field {
+                    r#type: "string".into(),
+                    optional: false,
+                    field: "connector_type".into(),
+                    fields: None,
+                },
+                Field {
+                    r#type: "string".into(),
+                    optional: false,
+                    field: "connector_name".into(),
+                    fields: None,
+                },
+                Field {
+                    r#type: "int64".into(),
+                    optional: false,
+                    field: "lsn".into(),
+                    fields: None,
+                },
+                Field {
+                    r#type: "string".into(),
+                    optional: false,
+                    field: "db".into(),
+                    fields: None,
+                },
+                Field {
+                    r#type: "string".into(),
+                    optional: false,
+                    field: "schema".into(),
+                    fields: None,
+                },
+                Field {
+                    r#type: "string".into(),
+                    optional: false,
+                    field: "table".into(),
+                    fields: None,
+                },
+                Field {
+                    r#type: "int64".into(),
+                    optional: false,
+                    field: "tx_id".into(),
+                    fields: None,
+                },
+            ]),
+        };
+
+        vec![before, after, op, ts_ms, source]
     }
 
     fn get_message_schema(

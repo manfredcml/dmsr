@@ -84,8 +84,6 @@ fn read_columns(num_columns: u16, cursor: &mut Cursor<&[u8]>) -> DMSRResult<Vec<
 }
 
 pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
-    println!("parse_pgoutput_event begins");
-    println!("raw event: {:?}", event);
     let mut cursor = Cursor::new(event);
 
     // Skip the 'w' identifier (first byte) and the lsn info (next 16 bytes)
@@ -97,7 +95,6 @@ pub fn parse_pgoutput_event(event: &[u8]) -> DMSRResult<PgOutputEvent> {
     let timestamp = parse_timestamp(ms_since_2000);
 
     let message_type = parse_u8_into_enum::<MessageType>(cursor.read_u8()?)?;
-    println!("message_type: {:?}", message_type);
 
     match message_type {
         MessageType::Relation => {
