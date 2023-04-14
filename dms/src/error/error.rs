@@ -20,6 +20,20 @@ pub enum DMSRError {
     StrumParseError(String),
     LockError(String),
     ParseIntError(String),
+    TokioJoinError(tokio::task::JoinError),
+    RegexError(regex::Error),
+}
+
+impl From<regex::Error> for DMSRError {
+    fn from(error: regex::Error) -> Self {
+        DMSRError::RegexError(error)
+    }
+}
+
+impl From<tokio::task::JoinError> for DMSRError {
+    fn from(error: tokio::task::JoinError) -> Self {
+        DMSRError::TokioJoinError(error)
+    }
 }
 
 impl From<mysql_async::binlog::events::BadColumnType> for DMSRError {
