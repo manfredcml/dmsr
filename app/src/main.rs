@@ -147,7 +147,10 @@ where
         let mut connector = ConnectorType::new(connector_name, &config).await?;
 
         info!("Starting stream...");
-        connector.stream(&kafka).await?;
+        let r = connector.stream(&kafka).await;
+
+        info!("Stream stopped");
+        info!("{:?}", r);
 
         Ok(())
     });

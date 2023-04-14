@@ -55,3 +55,14 @@ pub struct PostgresSource {
     pub table: String,
     pub tx_id: u32,
 }
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+pub struct MySQLSource {
+    pub connector_type: ConnectorKind,
+    pub connector_name: String,
+    pub db: String,
+    pub table: String,
+    pub server_id: u32,
+    pub file: String,
+    pub pos: u64,
+}
