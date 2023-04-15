@@ -1,4 +1,4 @@
-use crate::connector::postgres_source::pgoutput::events::{
+use crate::decoding::pgoutput::events::{
     BeginEvent, ColumnData, ColumnDataCategory, CommitEvent, DeleteEvent, InsertEvent, MessageType,
     PgOutputEvent, RelationColumn, RelationEvent, ReplicationIdentity, TruncateEvent,
     TruncateOptionBit, TupleType, UpdateEvent,
@@ -372,6 +372,7 @@ pub async fn keep_alive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decoding::pgoutput::events::{PgOutputEvent, ReplicationIdentity};
 
     #[test]
     fn test_parse_origin() {

@@ -1,32 +1,21 @@
 use crate::connector::connector::Connector;
 use crate::connector::mysql_source::config::MySQLSourceConfig;
-use crate::connector::postgres_source::event::{Action, Column, RawPostgresEvent};
 use crate::error::error::{DMSRError, DMSRResult};
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::hash::Hash;
-// use crate::event::message::{DataType, Field, JSONChangeEvent, Operation, Schema};
 use crate::kafka::kafka::Kafka;
+use crate::types::mysql_types::{MySQLType, MySQLTypeMap};
 use async_trait::async_trait;
-use byteorder::{LittleEndian, ReadBytesExt};
-use futures::{future, ready, Sink, StreamExt};
-use mysql_async::binlog::events::{BinlogEventHeader, Event, EventData};
-use mysql_async::binlog::events::{QueryEvent, TableMapEvent, WriteRowsEvent, WriteRowsEventV1};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
+use futures::StreamExt;
+use mysql_async::binlog::events::{QueryEvent, TableMapEvent, WriteRowsEvent};
+use mysql_async::binlog::value::BinlogValue;
 use mysql_async::binlog::EventType;
 use mysql_async::prelude::Queryable;
-use mysql_async::{BinlogRequest, BinlogStream, Conn, Pool};
+use mysql_async::{BinlogRequest, BinlogStream, Conn, Pool, Value};
 use regex::Regex;
-use std::io;
-use std::io::{Cursor, Read};
-use std::mem::swap;
-use std::os::unix::raw::ino_t;
+use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread::spawn;
-use std::time::{SystemTime, UNIX_EPOCH};
-use serde_json::{json, Value};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-use tokio_postgres::{Client, CopyBothDuplex, NoTls, SimpleQueryMessage, SimpleQueryRow};
 
 pub struct MySQLSourceConnector {
     config: MySQLSourceConfig,
@@ -35,6 +24,7 @@ pub struct MySQLSourceConnector {
     cdc_stream: BinlogStream,
     table_name_map: HashMap<String, MySQLTable>,
     table_id_map: HashMap<u64, MySQLTable>,
+    kafka_connect_type_map: MySQLTypeMap,
 }
 
 #[async_trait]
@@ -48,9 +38,9 @@ impl Connector for MySQLSourceConnector {
         );
         let pool = Pool::new(conn_str.as_str());
 
-        let mut db_conn_binlog = pool.get_conn().await?;
+        let db_conn_binlog = pool.get_conn().await?;
         let binlog_request = BinlogRequest::new(2);
-        let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
+        let cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
 
         let db_conn = pool.get_conn().await?;
         let db_conn = Arc::new(Mutex::new(db_conn));
@@ -62,18 +52,18 @@ impl Connector for MySQLSourceConnector {
             cdc_stream,
             table_name_map: HashMap::new(),
             table_id_map: HashMap::new(),
+            kafka_connect_type_map: MySQLTypeMap::new(),
         }))
     }
 
     async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()> {
+        let mut table_event: Option<TableMapEvent> = None;
         while let Some(event) = self.cdc_stream.next().await {
             let event = event?;
             println!("Event: {:?}\n", event);
 
             let binlog_file = self.get_current_binlog_file().await?;
-            let fde = event.fde();
-
-            let ts = fde.create_timestamp();
+            let ts = event.fde().create_timestamp();
             let header = event.header();
             let log_pos = header.log_pos();
 
@@ -88,63 +78,81 @@ impl Connector for MySQLSourceConnector {
                     if let Ok(t) = self.get_table_info(schema.into(), query.into()).await {
                         let full_table_name = format!("{}.{}", t.schema_name, t.table_name);
                         self.table_name_map.insert(full_table_name, t);
+                        println!("Table name map: {:?}", self.table_name_map);
                     }
                 }
                 EventType::TABLE_MAP_EVENT => {
                     let event = event.read_event::<TableMapEvent>()?;
-                    let table_id = event.table_id();
-
-                    let schema_name = event.database_name();
+                    let db_name = event.database_name();
                     let table_name = event.table_name();
-                    let full_table_name = format!("{}.{}", schema_name, table_name);
+                    println!("Database name: {:?}\n", db_name);
+                    println!("Table name: {:?}\n", table_name);
 
-                    let table_data = self
-                        .table_name_map
-                        .get(&full_table_name)
-                        .ok_or(DMSRError::MySQLError("table not found".into()));
-
-                    if table_data.is_err() {
-                        continue;
-                    }
-                    let table_data = table_data.unwrap();
-
-                    self.table_id_map.insert(table_id, table_data.clone());
+                    table_event = Some(event.into_owned());
                 }
                 EventType::WRITE_ROWS_EVENT => {
                     let event = event.read_event::<WriteRowsEvent>()?;
-                    let table_id = event.table_id();
-
-                    let table_data = self
-                        .table_id_map
-                        .get(&table_id)
-                        .ok_or(DMSRError::MySQLError("table not found".into()));
-                    if table_data.is_err() {
-                        continue;
-                    }
-                    let table_data = table_data.unwrap();
-
-                    let table_columns = &table_data.columns;
-
-                    let num_columns = event.num_columns();
-                    let mut cursor = Cursor::new(event.rows_data());
-                    let null_identifier = cursor.read_u8()?;
-
-                    let mut values: Value = json!({});
-
-                    // for (f, c) in fields.iter().zip(columns.iter()) {
-                    //     let field_name = f.field.clone();
-                    //     let field_value = c.column_value.clone();
-                    //     values[field_name] = json!(field_value);
-                    // }
-
-                    for n in 0..num_columns {
-                        let idx = n as usize;
-                        let is_null = (null_identifier >> n) & 1 == 1;
-                        let column = &table_columns[idx];
-                    }
+                    let num_columns = event.num_columns() as usize;
 
                     let rows_data = event.rows_data();
                     println!("Rows data: {:?}\n", rows_data);
+
+                    let table_event = table_event
+                        .as_ref()
+                        .ok_or(DMSRError::MySQLError("table event not found".into()))?;
+
+                    let full_table_name = format!(
+                        "{}.{}",
+                        table_event.database_name(),
+                        table_event.table_name()
+                    );
+                    println!("Full table name: {:?}\n", full_table_name);
+
+                    let table_metadata = self.table_name_map.get(&full_table_name);
+
+                    if table_metadata.is_none() {
+                        continue;
+                    }
+                    let table_metadata = table_metadata.unwrap();
+
+                    let table_columns = &table_metadata.columns;
+
+                    println!("Table columns: {:?}\n", table_columns);
+                    println!("Num columns: {:?}\n", num_columns);
+
+                    let binlog_rows = event.rows(table_event);
+                    for row in binlog_rows {
+                        let row = row?
+                            .1
+                            .ok_or(DMSRError::MySQLError("no column data found".into()))?;
+
+                        let mut payload_value = json!({});
+                        for n in 0..num_columns {
+                            let value = row
+                                .as_ref(n)
+                                .ok_or(DMSRError::MySQLError("no column data found".into()))?;
+
+                            println!("Value: {:?}\n", value);
+
+                            let col = table_columns
+                                .get(n)
+                                .ok_or(DMSRError::MySQLError("no column metadata found".into()))?;
+
+                            match value {
+                                BinlogValue::Value(Value::NULL) => {
+                                    payload_value[col.column_name.as_str()] = json!(null);
+                                }
+                                BinlogValue::Value(v) => {
+                                    let v = v.as_sql(false);
+                                    payload_value[col.column_name.as_str()] = json!(v);
+                                }
+                                BinlogValue::Jsonb(v) => {}
+                                BinlogValue::JsonDiff(v) => {}
+                            }
+
+                        }
+                        println!("Payload: {:?}\n", payload_value);
+                    }
                 }
                 EventType::UPDATE_ROWS_EVENT => {
                     // let event = event.read_event::<WriteRowsEvent>()?;
@@ -188,18 +196,29 @@ struct MySQLTable {
 impl MySQLSourceConnector {
     async fn get_current_binlog_file(&self) -> DMSRResult<String> {
         let mut db_conn = self.db_conn.lock().await;
-        let res: Vec<(String,)> = db_conn.query("SHOW MASTER STATUS").await?;
+        let res: Vec<(String, String, String, String, String)> =
+            db_conn.query("SHOW MASTER STATUS").await?;
         Ok(res[0].0.clone())
     }
 
     async fn get_table_info(&self, schema: String, query: String) -> DMSRResult<MySQLTable> {
-        let pattern = Regex::new(r"(?i)(?:CREATE|ALTER)\s+TABLE\s+(?:\w+\.)?(\w+)")?;
-        let table_name = pattern
+        println!("Schema: {:?}", schema);
+        println!("Query: {:?}", query);
+        let pattern = Regex::new(r"(?i)(?:CREATE|ALTER)\s+TABLE\s+(([\w_]+)\.)?([\w_]+)")?;
+        let captures = pattern
             .captures(&query)
-            .ok_or(DMSRError::MySQLError("Could not parse query".into()))?
-            .get(1)
-            .ok_or(DMSRError::MySQLError("Could not parse query".into()))?
-            .as_str();
+            .ok_or(DMSRError::MySQLError("Could not parse query".into()))?;
+
+        let extracted_schema = captures.get(2).map(|m| m.as_str().to_string());
+        let table_name = captures
+            .get(3)
+            .map(|m| m.as_str().to_string())
+            .ok_or(DMSRError::MySQLError("Could not parse query".into()))?;
+
+        let schema = extracted_schema.unwrap_or(schema);
+
+        println!("Schema: {:?}", schema);
+        println!("Table name: {:?}", table_name);
 
         let mut db_conn = self.db_conn.lock().await;
         let query = format!(

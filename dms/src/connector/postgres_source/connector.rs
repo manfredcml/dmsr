@@ -1,15 +1,16 @@
 use crate::connector::connector::Connector;
 use crate::connector::kind::ConnectorKind;
 use crate::connector::postgres_source::config::PostgresSourceConfig;
-use crate::connector::postgres_source::pgoutput::events::{
+use crate::decoding::pgoutput::events::{
     ColumnData, DeleteEvent, InsertEvent, PgOutputEvent, RelationColumn, RelationEvent,
     TruncateEvent, UpdateEvent,
 };
-use crate::connector::postgres_source::pgoutput::utils::{keep_alive, parse_pgoutput_event};
+use crate::decoding::pgoutput::utils::{keep_alive, parse_pgoutput_event};
 use crate::error::error::{DMSRError, DMSRResult};
 use crate::kafka::kafka::Kafka;
-use crate::message::message::{Field, KafkaMessage, Operation, Payload, PostgresSource, Schema};
-use crate::message::postgres_types::PostgresKafkaConnectTypeMap;
+use crate::message::message::{Field, KafkaMessage, Operation, Payload, Schema};
+use crate::message::postgres_source::PostgresSource;
+use crate::types::postgres_types::PostgresKafkaConnectTypeMap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;

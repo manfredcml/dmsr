@@ -1,4 +1,3 @@
-use crate::connector::kind::ConnectorKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
@@ -24,6 +23,17 @@ pub struct Field {
     pub fields: Option<Vec<Field>>,
 }
 
+impl Field {
+    pub fn new(r#type: String, optional: bool, field: String, fields: Option<Vec<Field>>) -> Self {
+        Field {
+            r#type,
+            optional,
+            field,
+            fields,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct Payload<Source> {
     pub before: Option<serde_json::Value>,
@@ -43,26 +53,4 @@ pub enum Operation {
     Delete,
     #[serde(rename = "t")]
     Truncate,
-}
-
-#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct PostgresSource {
-    pub connector_type: ConnectorKind,
-    pub connector_name: String,
-    pub lsn: u64,
-    pub db: String,
-    pub schema: String,
-    pub table: String,
-    pub tx_id: u32,
-}
-
-#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct MySQLSource {
-    pub connector_type: ConnectorKind,
-    pub connector_name: String,
-    pub db: String,
-    pub table: String,
-    pub server_id: u32,
-    pub file: String,
-    pub pos: u64,
 }
