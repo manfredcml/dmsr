@@ -11,10 +11,10 @@ use crate::message::mysql_source::MySQLSource;
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
-use mysql_async::binlog::events::{Event, QueryEvent, TableMapEvent, WriteRowsEvent};
+use mysql_async::binlog::events::{Event, QueryEvent, RotateEvent, TableMapEvent, WriteRowsEvent};
 use mysql_async::binlog::value::BinlogValue;
 use mysql_async::binlog::EventType;
-use mysql_async::{BinlogRequest, BinlogStream, Conn, Pool, Value};
+use mysql_async::{BinlogRequest, BinlogStream, Pool, Value};
 use serde_json::json;
 use sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, Ident, ObjectName,
@@ -23,16 +23,14 @@ use sqlparser::ast::{
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 pub struct MySQLSourceConnector<'a> {
     config: MySQLSourceConfig,
     connector_name: String,
-    db_conn: Arc<Mutex<Conn>>,
     cdc_stream: BinlogStream,
     table_def_map: HashMap<String, MySQLTable>,
     last_table_map_event: Option<TableMapEvent<'a>>,
+    binlog_file_name: String,
 }
 
 #[async_trait]
@@ -50,16 +48,13 @@ impl<'a> Connector for MySQLSourceConnector<'a> {
         let binlog_request = BinlogRequest::new(2);
         let cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
 
-        let db_conn = pool.get_conn().await?;
-        let db_conn = Arc::new(Mutex::new(db_conn));
-
         Ok(Box::new(MySQLSourceConnector {
             config: config.clone(),
             connector_name,
-            db_conn,
             cdc_stream,
             table_def_map: HashMap::new(),
             last_table_map_event: None,
+            binlog_file_name: "".into(),
         }))
     }
 
@@ -67,7 +62,7 @@ impl<'a> Connector for MySQLSourceConnector<'a> {
         while let Some(event) = self.cdc_stream.next().await {
             let event = event?;
 
-            let ts = event.fde().create_timestamp();
+            let ts = 1000 * (event.fde().create_timestamp() as u64);
             let header = event.header();
             let log_pos = header.log_pos() as u64;
 
@@ -77,7 +72,7 @@ impl<'a> Connector for MySQLSourceConnector<'a> {
                 EventType::QUERY_EVENT => self.handle_query_event(event).await?,
                 EventType::TABLE_MAP_EVENT => self.handle_table_map_event(event)?,
                 EventType::WRITE_ROWS_EVENT => {
-                    let kafka_messages = self.handle_write_rows_event(event, log_pos);
+                    let kafka_messages = self.handle_write_rows_event(event, ts, log_pos);
                     let Ok(kafka_messages) = kafka_messages else {
                         continue
                     };
@@ -85,6 +80,7 @@ impl<'a> Connector for MySQLSourceConnector<'a> {
                 }
                 EventType::UPDATE_ROWS_EVENT => {}
                 EventType::DELETE_ROWS_EVENT => {}
+                EventType::ROTATE_EVENT => self.handle_rotate_event(event)?,
                 _ => {}
             }
         }
@@ -326,7 +322,7 @@ impl<'a> MySQLSourceConnector<'a> {
     ) -> DMSRResult<()> {
         let (_, _, new_full_table_name) =
             parse_table_name_from_sqlparser_object_name(schema, table_name)?;
-        let mut table = self.retrieve_table_meta(&full_table_name)?.clone();
+        let mut table = self.retrieve_table_meta(full_table_name)?.clone();
         table.table_name = table_name.to_string();
         self.table_def_map.insert(new_full_table_name, table);
         self.table_def_map.remove(full_table_name);
@@ -349,9 +345,17 @@ impl<'a> MySQLSourceConnector<'a> {
         Ok(())
     }
 
+    fn handle_rotate_event(&mut self, event: Event) -> DMSRResult<()> {
+        let event = event.read_event::<RotateEvent>()?;
+        debug!("ROTATE_EVENT: {:?}\n", event);
+        self.binlog_file_name = event.name().to_string();
+        Ok(())
+    }
+
     fn handle_write_rows_event(
         &mut self,
         event: Event,
+        ts: u64,
         log_pos: u64,
     ) -> DMSRResult<Vec<KafkaMessage<MySQLSource>>> {
         let event = event.read_event::<WriteRowsEvent>()?;
@@ -403,8 +407,8 @@ impl<'a> MySQLSourceConnector<'a> {
                 self.connector_name.clone(),
                 schema.clone(),
                 table_name.clone(),
-                0,
-                "PLACEHOLDER".into(),
+                self.config.server_id,
+                self.binlog_file_name.clone(),
                 log_pos,
             );
 
@@ -412,7 +416,7 @@ impl<'a> MySQLSourceConnector<'a> {
                 None,
                 Some(payload_value),
                 Operation::Create,
-                0,
+                ts,
                 kafka_message_source,
             );
 

@@ -73,7 +73,7 @@ pub struct Payload<Source> {
     pub before: Option<serde_json::Value>,
     pub after: Option<serde_json::Value>,
     pub op: Operation,
-    pub ts_ms: i64,
+    pub ts_ms: u64,
     pub source: Source,
 }
 
@@ -82,7 +82,7 @@ impl<Source> Payload<Source> {
         before: Option<serde_json::Value>,
         after: Option<serde_json::Value>,
         op: Operation,
-        ts_ms: i64,
+        ts_ms: u64,
         source: Source,
     ) -> Self {
         Payload {

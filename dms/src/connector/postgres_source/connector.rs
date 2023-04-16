@@ -409,7 +409,7 @@ impl PostgresSourceConnector {
             before: None,
             after: Some(db_values),
             op: Operation::Create,
-            ts_ms: event.timestamp.timestamp_millis(),
+            ts_ms: event.timestamp.timestamp_millis().try_into()?,
             source,
         };
 
@@ -433,7 +433,7 @@ impl PostgresSourceConnector {
             before: None,
             after: Some(db_values),
             op: Operation::Update,
-            ts_ms: event.timestamp.timestamp_millis(),
+            ts_ms: event.timestamp.timestamp_millis().try_into()?,
             source,
         };
 
@@ -457,7 +457,7 @@ impl PostgresSourceConnector {
             before: Some(db_values),
             after: None,
             op: Operation::Delete,
-            ts_ms: event.timestamp.timestamp_millis(),
+            ts_ms: event.timestamp.timestamp_millis().try_into()?,
             source,
         };
 
@@ -481,7 +481,7 @@ impl PostgresSourceConnector {
                 before: None,
                 after: None,
                 op: Operation::Truncate,
-                ts_ms: event.timestamp.timestamp_millis(),
+                ts_ms: event.timestamp.timestamp_millis().try_into()?,
                 source,
             };
 

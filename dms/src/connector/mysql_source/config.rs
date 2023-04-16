@@ -7,4 +7,5 @@ pub struct MySQLSourceConfig {
     pub user: String,
     pub password: String,
     pub db: String,
+    pub server_id: u32,
 }
