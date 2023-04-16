@@ -14,7 +14,8 @@ use mysql_async::{BinlogRequest, BinlogStream, Conn, Pool, Value};
 use regex::Regex;
 use serde_json::json;
 use sqlparser::ast::{
-    ColumnDef, ColumnOption, ColumnOptionDef, ObjectType, Statement, TableConstraint,
+    AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, ColumnOptionDef,
+    ObjectName, ObjectType, Statement, TableConstraint,
 };
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
@@ -176,6 +177,32 @@ struct MySQLTable {
     columns: Vec<MySQLTableColumn>,
 }
 
+impl MySQLTable {
+    pub fn find_column_mut(&mut self, column_name: &str) -> DMSRResult<&mut MySQLTableColumn> {
+        let col = self
+            .columns
+            .iter_mut()
+            .find(|c| c.column_name == column_name)
+            .ok_or(DMSRError::MySQLError(format!(
+                "column {} not found",
+                column_name
+            )))?;
+        Ok(col)
+    }
+
+    pub fn find_column(&self, column_name: &str) -> DMSRResult<&MySQLTableColumn> {
+        let col = self
+            .columns
+            .iter()
+            .find(|c| c.column_name == column_name)
+            .ok_or(DMSRError::MySQLError(format!(
+                "column {} not found",
+                column_name
+            )))?;
+        Ok(col)
+    }
+}
+
 impl MySQLSourceConnector {
     async fn get_current_binlog_file(&self) -> DMSRResult<String> {
         let mut db_conn = self.db_conn.lock().await;
@@ -190,6 +217,8 @@ impl MySQLSourceConnector {
         let dialect = MySqlDialect {};
         let ast: Vec<Statement> = Parser::parse_sql(&dialect, query.as_str())?;
 
+        println!("AST: {:?}\n", ast.first());
+
         match ast.first() {
             Some(Statement::CreateTable {
                 name,
@@ -197,19 +226,9 @@ impl MySQLSourceConnector {
                 constraints,
                 ..
             }) => {
-                let columns = columns as &Vec<ColumnDef>;
-
-                let table_name = name.to_string();
-                let split = table_name.split('.').collect::<Vec<&str>>();
-                let mut schema = schema;
-                if split.len() == 2 {
-                    schema = split[0].to_string();
-                }
-
-                let full_table_name = format!("{}.{}", schema, table_name);
-
-                println!("Table name: {:?}\n", table_name);
+                let (schema, table_name, full_table_name) = self.parse_table_name(&schema, name)?;
                 let mut mysql_table_columns: Vec<MySQLTableColumn> = vec![];
+
                 for c in columns {
                     let column_name = c.name.to_string();
                     let data_type = c.data_type.to_string();
@@ -269,10 +288,136 @@ impl MySQLSourceConnector {
 
                 self.table_name_map.insert(full_table_name, mysql_table);
             }
-            Some(Statement::AlterTable { name, .. }) => {}
+            Some(Statement::AlterTable { name, operation }) => {
+                let (schema, table_name, full_table_name) = self.parse_table_name(&schema, name)?;
+
+                println!("Operation: {:?}\n", operation);
+
+                match operation {
+                    AlterTableOperation::AddColumn { column_def, .. } => {
+                        let column_name = column_def.name.to_string();
+                        let data_type = column_def.data_type.to_string();
+                        let is_nullable = !column_def
+                            .options
+                            .iter()
+                            .map(|def| &def.option)
+                            .any(|o| matches!(o, ColumnOption::NotNull));
+
+                        let is_primary_key =
+                            column_def
+                                .options
+                                .iter()
+                                .map(|def| &def.option)
+                                .any(|o| match o {
+                                    ColumnOption::Unique { is_primary } => *is_primary,
+                                    _ => false,
+                                });
+
+                        let table = self.retrieve_table_meta_mut(&full_table_name)?;
+                        table.columns.push(MySQLTableColumn {
+                            column_name,
+                            data_type,
+                            is_nullable: is_nullable && !is_primary_key,
+                            is_primary_key,
+                        });
+                    }
+                    AlterTableOperation::AlterColumn { column_name, op } => {
+                        let column_name = column_name.to_string();
+                        let col = self
+                            .retrieve_table_meta_mut(&full_table_name)?
+                            .find_column_mut(&column_name)?;
+
+                        match op {
+                            AlterColumnOperation::SetDataType { data_type, .. } => {
+                                col.data_type = data_type.to_string();
+                            }
+                            AlterColumnOperation::SetNotNull => {
+                                col.is_nullable = false;
+                            }
+                            AlterColumnOperation::DropNotNull => {
+                                col.is_nullable = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    AlterTableOperation::DropColumn { column_name, .. } => {
+                        let column_name = column_name.to_string();
+                        let table = self.retrieve_table_meta_mut(&full_table_name)?;
+                        table.columns = table
+                            .columns
+                            .clone()
+                            .into_iter()
+                            .filter(|c| c.column_name != column_name)
+                            .collect();
+                    }
+                    AlterTableOperation::DropPrimaryKey => {
+                        let table = self.retrieve_table_meta_mut(&full_table_name)?;
+                        table.columns = table
+                            .columns
+                            .clone()
+                            .into_iter()
+                            .map(|mut c| {
+                                c.is_primary_key = false;
+                                c
+                            })
+                            .collect();
+                    }
+                    AlterTableOperation::RenameColumn {
+                        old_column_name,
+                        new_column_name,
+                    } => {
+                        let table = self.retrieve_table_meta_mut(&full_table_name)?;
+                        let old_column_name = old_column_name.to_string();
+                        let new_column_name = new_column_name.to_string();
+                        let col = table.find_column_mut(&old_column_name)?;
+                        col.column_name = new_column_name;
+                    }
+                    AlterTableOperation::RenameTable { table_name } => {
+                        let (_, _, new_full_table_name) = self.parse_table_name(&schema, table_name)?;
+                        let mut table = self.retrieve_table_meta(&full_table_name)?.clone();
+                        table.table_name = table_name.to_string();
+                        self.table_name_map.insert(new_full_table_name, table);
+                        self.table_name_map.remove(&full_table_name);
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
 
         Ok(())
+    }
+
+    fn parse_table_name(
+        &self,
+        schema: &String,
+        object_name: &ObjectName,
+    ) -> DMSRResult<(String, String, String)> {
+        let mut table_name = object_name.to_string();
+        let split = table_name.split('.').collect::<Vec<&str>>();
+        let mut schema = schema.clone();
+        if split.len() == 2 {
+            schema = split[0].to_string();
+            table_name = split[1].to_string();
+        }
+        let full_table_name = format!("{}.{}", schema, table_name);
+
+        Ok((schema, table_name, full_table_name))
+    }
+
+    fn retrieve_table_meta_mut(&mut self, table_name: &String) -> DMSRResult<&mut MySQLTable> {
+        self.table_name_map
+            .get_mut(table_name)
+            .ok_or(DMSRError::MySQLSourceConnectorError(
+                "No table metadata found".into(),
+            ))
+    }
+
+    fn retrieve_table_meta(&self, table_name: &String) -> DMSRResult<&MySQLTable> {
+        self.table_name_map
+            .get(table_name)
+            .ok_or(DMSRError::MySQLSourceConnectorError(
+                "No table metadata found".into(),
+            ))
     }
 }
