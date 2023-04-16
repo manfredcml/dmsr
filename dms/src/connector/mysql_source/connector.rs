@@ -1,7 +1,13 @@
 use crate::connector::connector::Connector;
 use crate::connector::mysql_source::config::MySQLSourceConfig;
+use crate::connector::mysql_source::decoding::{
+    parse_table_name_from_sqlparser_object_name, parse_table_name_from_table_map_event, MySQLTable,
+    MySQLTableColumn,
+};
 use crate::error::error::{DMSRError, DMSRResult};
 use crate::kafka::kafka::Kafka;
+use crate::message::message::{KafkaMessage, Operation, Payload, Schema};
+use crate::message::mysql_source::MySQLSource;
 use crate::types::mysql_types::MySQLTypeMap;
 use async_trait::async_trait;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
@@ -9,13 +15,11 @@ use futures::StreamExt;
 use mysql_async::binlog::events::{QueryEvent, TableMapEvent, WriteRowsEvent};
 use mysql_async::binlog::value::BinlogValue;
 use mysql_async::binlog::EventType;
-use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogRequest, BinlogStream, Conn, Pool, Value};
-use regex::Regex;
 use serde_json::json;
 use sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, ColumnOptionDef,
-    ObjectName, ObjectType, Statement, TableConstraint,
+    ObjectName, ObjectType, Statement, Table, TableConstraint,
 };
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
@@ -28,8 +32,7 @@ pub struct MySQLSourceConnector {
     connector_name: String,
     db_conn: Arc<Mutex<Conn>>,
     cdc_stream: BinlogStream,
-    table_name_map: HashMap<String, MySQLTable>,
-    table_id_map: HashMap<u64, MySQLTable>,
+    table_def_map: HashMap<String, MySQLTable>,
     kafka_connect_type_map: MySQLTypeMap,
 }
 
@@ -56,8 +59,7 @@ impl Connector for MySQLSourceConnector {
             connector_name,
             db_conn,
             cdc_stream,
-            table_name_map: HashMap::new(),
-            table_id_map: HashMap::new(),
+            table_def_map: HashMap::new(),
             kafka_connect_type_map: MySQLTypeMap::new(),
         }))
     }
@@ -67,56 +69,49 @@ impl Connector for MySQLSourceConnector {
         while let Some(event) = self.cdc_stream.next().await {
             let event = event?;
 
-            let binlog_file = self.get_current_binlog_file().await?;
             let ts = event.fde().create_timestamp();
             let header = event.header();
-            let log_pos = header.log_pos();
+            let log_pos = header.log_pos() as u64;
 
             let event_type = header.event_type()?;
 
             match event_type {
                 EventType::QUERY_EVENT => {
                     let event = event.read_event::<QueryEvent>()?;
-                    println!("Query event: {:?}\n", event);
+                    println!("QUERY_EVENT: {:?}\n", event);
                     let schema = event.schema();
                     let query = event.query();
-                    self.get_table_info(schema.into(), query.into()).await?;
-                    // if let Ok(t) = self.get_table_info(schema.into(), query.into()).await {
-                    //     let full_table_name = format!("{}.{}", t.schema_name, t.table_name);
-                    //     self.table_name_map.insert(full_table_name, t);
-                    // }
-                    println!("================================================")
+                    self.update_table_def(schema.into(), query.into()).await?;
                 }
                 EventType::TABLE_MAP_EVENT => {
                     let event = event.read_event::<TableMapEvent>()?;
-                    let db_name = event.database_name();
-                    let table_name = event.table_name();
+                    println!("TABLE_MAP_EVENT: {:?}\n", event);
                     table_event = Some(event.into_owned());
                 }
                 EventType::WRITE_ROWS_EVENT => {
                     let event = event.read_event::<WriteRowsEvent>()?;
-                    let num_columns = event.num_columns() as usize;
+                    println!("WRITE_ROWS_EVENT: {:?}\n", event);
 
-                    let rows_data = event.rows_data();
+                    let table_event =
+                        table_event
+                            .as_ref()
+                            .ok_or(DMSRError::MySQLSourceConnectorError(
+                                "Preceding TABLE_MAP_EVENT not found".into(),
+                            ))?;
 
-                    let table_event = table_event
-                        .as_ref()
-                        .ok_or(DMSRError::MySQLError("table event not found".into()))?;
+                    let (schema, table_name, full_table_name) =
+                        parse_table_name_from_table_map_event(table_event)?;
 
-                    let full_table_name = format!(
-                        "{}.{}",
-                        table_event.database_name(),
-                        table_event.table_name()
-                    );
-
-                    let table_metadata = self.table_name_map.get(&full_table_name);
-
-                    if table_metadata.is_none() {
+                    println!("full_table_name: {:?}\n", full_table_name);
+                    let table_metadata = self.retrieve_table_meta(&full_table_name);
+                    let Ok(table_metadata) = table_metadata else {
                         continue;
-                    }
-                    let table_metadata = table_metadata.unwrap();
+                    };
+                    println!("table_metadata: {:?}\n", table_metadata);
 
                     let table_columns = &table_metadata.columns;
+
+                    let num_columns = event.num_columns() as usize;
 
                     let binlog_rows = event.rows(table_event);
                     for row in binlog_rows {
@@ -132,12 +127,7 @@ impl Connector for MySQLSourceConnector {
 
                             let col = table_columns
                                 .get(n)
-                                .ok_or(DMSRError::MySQLError("no column metadata found".into()));
-
-                            if col.is_err() {
-                                break;
-                            }
-                            let col = col?;
+                                .ok_or(DMSRError::MySQLError("no column metadata found".into()))?;
 
                             match value {
                                 BinlogValue::Value(Value::NULL) => {
@@ -147,10 +137,35 @@ impl Connector for MySQLSourceConnector {
                                     let v = v.as_sql(false);
                                     payload_value[col.column_name.as_str()] = json!(v);
                                 }
-                                BinlogValue::Jsonb(v) => {}
-                                BinlogValue::JsonDiff(v) => {}
+                                BinlogValue::Jsonb(_) => {}
+                                BinlogValue::JsonDiff(_) => {}
                             }
                         }
+
+                        let kafka_message_schema =
+                            table_metadata.as_kafka_message_schema(full_table_name.as_str())?;
+
+                        let kafka_message_source = MySQLSource::new(
+                            self.connector_name.clone(),
+                            schema.clone(),
+                            table_name.clone(),
+                            0,
+                            "PLACEHOLDER".into(),
+                            log_pos,
+                        );
+
+                        let kafka_message_payload: Payload<MySQLSource> = Payload::new(
+                            None,
+                            Some(payload_value),
+                            Operation::Create,
+                            0,
+                            kafka_message_source,
+                        );
+
+                        let kafka_message =
+                            KafkaMessage::new(kafka_message_schema, kafka_message_payload);
+
+                        println!("Kafka message: {:?}", serde_json::to_string(&kafka_message)?);
                     }
                 }
                 EventType::UPDATE_ROWS_EVENT => {}
@@ -162,56 +177,8 @@ impl Connector for MySQLSourceConnector {
     }
 }
 
-#[derive(Debug, Clone)]
-struct MySQLTableColumn {
-    column_name: String,
-    data_type: String,
-    is_nullable: bool,
-    is_primary_key: bool,
-}
-
-#[derive(Debug, Clone)]
-struct MySQLTable {
-    schema_name: String,
-    table_name: String,
-    columns: Vec<MySQLTableColumn>,
-}
-
-impl MySQLTable {
-    pub fn find_column_mut(&mut self, column_name: &str) -> DMSRResult<&mut MySQLTableColumn> {
-        let col = self
-            .columns
-            .iter_mut()
-            .find(|c| c.column_name == column_name)
-            .ok_or(DMSRError::MySQLError(format!(
-                "column {} not found",
-                column_name
-            )))?;
-        Ok(col)
-    }
-
-    pub fn find_column(&self, column_name: &str) -> DMSRResult<&MySQLTableColumn> {
-        let col = self
-            .columns
-            .iter()
-            .find(|c| c.column_name == column_name)
-            .ok_or(DMSRError::MySQLError(format!(
-                "column {} not found",
-                column_name
-            )))?;
-        Ok(col)
-    }
-}
-
 impl MySQLSourceConnector {
-    async fn get_current_binlog_file(&self) -> DMSRResult<String> {
-        let mut db_conn = self.db_conn.lock().await;
-        let res: Vec<(String, String, String, String, String)> =
-            db_conn.query("SHOW MASTER STATUS").await?;
-        Ok(res[0].0.clone())
-    }
-
-    async fn get_table_info(&mut self, schema: String, query: String) -> DMSRResult<()> {
+    async fn update_table_def(&mut self, schema: String, query: String) -> DMSRResult<()> {
         println!("Query: {:?}\n", query);
 
         let dialect = MySqlDialect {};
@@ -226,7 +193,8 @@ impl MySQLSourceConnector {
                 constraints,
                 ..
             }) => {
-                let (schema, table_name, full_table_name) = self.parse_table_name(&schema, name)?;
+                let (schema, table_name, full_table_name) =
+                    parse_table_name_from_sqlparser_object_name(&schema, name)?;
                 let mut mysql_table_columns: Vec<MySQLTableColumn> = vec![];
 
                 for c in columns {
@@ -286,10 +254,11 @@ impl MySQLSourceConnector {
 
                 println!("MySQL Table: {:?}\n", mysql_table);
 
-                self.table_name_map.insert(full_table_name, mysql_table);
+                self.table_def_map.insert(full_table_name, mysql_table);
             }
             Some(Statement::AlterTable { name, operation }) => {
-                let (schema, table_name, full_table_name) = self.parse_table_name(&schema, name)?;
+                let (schema, _, full_table_name) =
+                    parse_table_name_from_sqlparser_object_name(&schema, name)?;
 
                 println!("Operation: {:?}\n", operation);
 
@@ -325,7 +294,7 @@ impl MySQLSourceConnector {
                         let column_name = column_name.to_string();
                         let col = self
                             .retrieve_table_meta_mut(&full_table_name)?
-                            .find_column_mut(&column_name)?;
+                            .get_column_mut(&column_name)?;
 
                         match op {
                             AlterColumnOperation::SetDataType { data_type, .. } => {
@@ -369,15 +338,16 @@ impl MySQLSourceConnector {
                         let table = self.retrieve_table_meta_mut(&full_table_name)?;
                         let old_column_name = old_column_name.to_string();
                         let new_column_name = new_column_name.to_string();
-                        let col = table.find_column_mut(&old_column_name)?;
+                        let col = table.get_column_mut(&old_column_name)?;
                         col.column_name = new_column_name;
                     }
                     AlterTableOperation::RenameTable { table_name } => {
-                        let (_, _, new_full_table_name) = self.parse_table_name(&schema, table_name)?;
+                        let (_, _, new_full_table_name) =
+                            parse_table_name_from_sqlparser_object_name(&schema, table_name)?;
                         let mut table = self.retrieve_table_meta(&full_table_name)?.clone();
                         table.table_name = table_name.to_string();
-                        self.table_name_map.insert(new_full_table_name, table);
-                        self.table_name_map.remove(&full_table_name);
+                        self.table_def_map.insert(new_full_table_name, table);
+                        self.table_def_map.remove(&full_table_name);
                     }
                     _ => {}
                 }
@@ -388,25 +358,8 @@ impl MySQLSourceConnector {
         Ok(())
     }
 
-    fn parse_table_name(
-        &self,
-        schema: &String,
-        object_name: &ObjectName,
-    ) -> DMSRResult<(String, String, String)> {
-        let mut table_name = object_name.to_string();
-        let split = table_name.split('.').collect::<Vec<&str>>();
-        let mut schema = schema.clone();
-        if split.len() == 2 {
-            schema = split[0].to_string();
-            table_name = split[1].to_string();
-        }
-        let full_table_name = format!("{}.{}", schema, table_name);
-
-        Ok((schema, table_name, full_table_name))
-    }
-
     fn retrieve_table_meta_mut(&mut self, table_name: &String) -> DMSRResult<&mut MySQLTable> {
-        self.table_name_map
+        self.table_def_map
             .get_mut(table_name)
             .ok_or(DMSRError::MySQLSourceConnectorError(
                 "No table metadata found".into(),
@@ -414,7 +367,7 @@ impl MySQLSourceConnector {
     }
 
     fn retrieve_table_meta(&self, table_name: &String) -> DMSRResult<&MySQLTable> {
-        self.table_name_map
+        self.table_def_map
             .get(table_name)
             .ok_or(DMSRError::MySQLSourceConnectorError(
                 "No table metadata found".into(),

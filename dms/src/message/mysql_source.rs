@@ -33,16 +33,16 @@ impl MySQLSource {
         }
     }
 
-    pub fn get_schema(&self) -> Field {
+    pub fn get_schema() -> Field {
         let fields = vec![
-            Field::new("string".into(), false, "connector_type".into(), None),
-            Field::new("string".into(), false, "connector_name".into(), None),
-            Field::new("string".into(), false, "db".into(), None),
-            Field::new("string".into(), false, "table".into(), None),
-            Field::new("int64".into(), false, "server_id".into(), None),
-            Field::new("string".into(), false, "file".into(), None),
-            Field::new("int64".into(), false, "pos".into(), None),
+            Field::new("string", false, "connector_type", None),
+            Field::new("string", false, "connector_name", None),
+            Field::new("string", false, "db", None),
+            Field::new("string", false, "table", None),
+            Field::new("int64", false, "server_id", None),
+            Field::new("string", false, "file", None),
+            Field::new("int64", false, "pos", None),
         ];
-        Field::new("struct".into(), false, "source".into(), Some(fields))
+        Field::new("struct", false, "source", Some(fields))
     }
 }
