@@ -22,6 +22,13 @@ pub enum DMSRError {
     ParseIntError(String),
     TokioJoinError(tokio::task::JoinError),
     RegexError(regex::Error),
+    MySQLSourceConnectorError(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<sqlparser::parser::ParserError> for DMSRError {
+    fn from(error: sqlparser::parser::ParserError) -> Self {
+        DMSRError::MySQLSourceConnectorError(Box::new(error))
+    }
 }
 
 impl From<regex::Error> for DMSRError {
