@@ -11,7 +11,11 @@ use crate::message::mysql_source::MySQLSource;
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
-use mysql_async::binlog::events::{Event, QueryEvent, RotateEvent, TableMapEvent, WriteRowsEvent};
+use mysql_async::binlog::events::{
+    DeleteRowsEvent, Event, QueryEvent, RotateEvent, RowsEventRows, TableMapEvent, UpdateRowsEvent,
+    WriteRowsEvent,
+};
+use mysql_async::binlog::row::BinlogRow;
 use mysql_async::binlog::value::BinlogValue;
 use mysql_async::binlog::EventType;
 use mysql_async::{BinlogRequest, BinlogStream, Pool, Value};
@@ -68,18 +72,26 @@ impl<'a> Connector for MySQLSourceConnector<'a> {
 
             let event_type = header.event_type()?;
 
+            debug!("**Event_type: {:?}**", event_type);
+
             match event_type {
                 EventType::QUERY_EVENT => self.handle_query_event(event).await?,
                 EventType::TABLE_MAP_EVENT => self.handle_table_map_event(event)?,
                 EventType::WRITE_ROWS_EVENT => {
-                    let kafka_messages = self.handle_write_rows_event(event, ts, log_pos);
-                    let Ok(kafka_messages) = kafka_messages else {
-                        continue
-                    };
+                    let kafka_messages =
+                        self.handle_rows_event(event, EventType::WRITE_ROWS_EVENT, ts, log_pos);
                     debug!("WRITE_ROWS_EVENT - Kafka Messages: {:?}", kafka_messages);
                 }
-                EventType::UPDATE_ROWS_EVENT => {}
-                EventType::DELETE_ROWS_EVENT => {}
+                EventType::UPDATE_ROWS_EVENT => {
+                    let kafka_messages =
+                        self.handle_rows_event(event, EventType::UPDATE_ROWS_EVENT, ts, log_pos);
+                    debug!("UPDATE_ROWS_EVENT - Kafka Messages: {:?}", kafka_messages);
+                }
+                EventType::DELETE_ROWS_EVENT => {
+                    let kafka_messages =
+                        self.handle_rows_event(event, EventType::DELETE_ROWS_EVENT, ts, log_pos);
+                    debug!("DELETE_ROWS_EVENT - Kafka Messages: {:?}", kafka_messages);
+                }
                 EventType::ROTATE_EVENT => self.handle_rotate_event(event)?,
                 _ => {}
             }
@@ -352,15 +364,13 @@ impl<'a> MySQLSourceConnector<'a> {
         Ok(())
     }
 
-    fn handle_write_rows_event(
+    fn handle_rows_event(
         &mut self,
         event: Event,
+        event_type: EventType,
         ts: u64,
         log_pos: u64,
     ) -> DMSRResult<Vec<KafkaMessage<MySQLSource>>> {
-        let event = event.read_event::<WriteRowsEvent>()?;
-        debug!("WRITE_ROWS_EVENT: {:?}\n", event);
-
         let table_event = self.retrieve_last_table_event()?;
 
         let (schema, table_name, full_table_name) =
@@ -370,62 +380,171 @@ impl<'a> MySQLSourceConnector<'a> {
         let table_columns = &table_metadata.columns;
         let num_columns = table_columns.len();
 
-        let binlog_rows = event.rows(table_event);
-        let mut kafka_messages = vec![];
-        for row in binlog_rows {
-            let row = row?
-                .1
-                .ok_or(DMSRError::MySQLError("no column data found".into()))?;
+        let kafka_messages: Vec<KafkaMessage<MySQLSource>>;
 
-            let mut payload_value = json!({});
-            for n in 0..num_columns {
-                let value = row
-                    .as_ref(n)
-                    .ok_or(DMSRError::MySQLError("no column data found".into()))?;
-
-                let col = table_columns
-                    .get(n)
-                    .ok_or(DMSRError::MySQLError("no column metadata found".into()))?;
-
-                match value {
-                    BinlogValue::Value(Value::NULL) => {
-                        payload_value[col.column_name.as_str()] = json!(null);
-                    }
-                    BinlogValue::Value(v) => {
-                        let v = v.as_sql(false);
-                        payload_value[col.column_name.as_str()] = json!(v);
-                    }
-                    BinlogValue::Jsonb(_) => {}
-                    BinlogValue::JsonDiff(_) => {}
-                }
+        match event_type {
+            EventType::WRITE_ROWS_EVENT => {
+                let event = event.read_event::<WriteRowsEvent>()?;
+                debug!("WRITE_ROWS_EVENT: {:?}\n", event);
+                let kafka_messages: Vec<KafkaMessage<MySQLSource>> = event
+                    .rows(table_event)
+                    .into_iter()
+                    .filter_map(|r| r.ok())
+                    .map(|r| {
+                        (
+                            self.parse_binlog_rows(r.0, num_columns, table_columns),
+                            self.parse_binlog_rows(r.1, num_columns, table_columns),
+                        )
+                    })
+                    .filter_map(|payload| {
+                        self.construct_kafka_message(
+                            payload.0,
+                            payload.1,
+                            table_metadata,
+                            ts,
+                            log_pos,
+                        )
+                        .ok()
+                    })
+                    .collect();
             }
-
-            let kafka_message_schema =
-                table_metadata.as_kafka_message_schema(full_table_name.as_str())?;
-
-            let kafka_message_source = MySQLSource::new(
-                self.connector_name.clone(),
-                schema.clone(),
-                table_name.clone(),
-                self.config.server_id,
-                self.binlog_file_name.clone(),
-                log_pos,
-            );
-
-            let kafka_message_payload: Payload<MySQLSource> = Payload::new(
-                None,
-                Some(payload_value),
-                Operation::Create,
-                ts,
-                kafka_message_source,
-            );
-
-            let kafka_message = KafkaMessage::new(kafka_message_schema, kafka_message_payload);
-
-            kafka_messages.push(kafka_message);
+            EventType::UPDATE_ROWS_EVENT => {
+                let event = event.read_event::<UpdateRowsEvent>()?;
+                debug!("UPDATE_ROWS_EVENT: {:?}\n", event);
+                let kafka_messages: Vec<KafkaMessage<MySQLSource>> = event
+                    .rows(table_event)
+                    .into_iter()
+                    .filter_map(|r| r.ok())
+                    .map(|r| {
+                        (
+                            self.parse_binlog_rows(r.0, num_columns, table_columns),
+                            self.parse_binlog_rows(r.1, num_columns, table_columns),
+                        )
+                    })
+                    .filter_map(|payload| {
+                        self.construct_kafka_message(
+                            payload.0,
+                            payload.1,
+                            table_metadata,
+                            ts,
+                            log_pos,
+                        )
+                        .ok()
+                    })
+                    .collect();
+            }
+            EventType::DELETE_ROWS_EVENT => {
+                let event = event.read_event::<DeleteRowsEvent>()?;
+                debug!("DELETE_ROWS_EVENT: {:?}\n", event);
+                let kafka_messages: Vec<KafkaMessage<MySQLSource>> = event
+                    .rows(table_event)
+                    .into_iter()
+                    .filter_map(|r| r.ok())
+                    .map(|r| {
+                        (
+                            self.parse_binlog_rows(r.0, num_columns, table_columns),
+                            self.parse_binlog_rows(r.1, num_columns, table_columns),
+                        )
+                    })
+                    .filter_map(|payload| {
+                        self.construct_kafka_message(
+                            payload.0,
+                            payload.1,
+                            table_metadata,
+                            ts,
+                            log_pos,
+                        )
+                        .ok()
+                    })
+                    .collect();
+            }
+            _ => {
+                return Err(DMSRError::MySQLSourceConnectorError(
+                    "unsupported event type".into(),
+                ))
+            }
         }
 
-        Ok(kafka_messages)
+        Ok(vec![])
+    }
+
+    fn parse_binlog_rows(
+        &self,
+        row: Option<BinlogRow>,
+        num_columns: usize,
+        table_columns: &[MySQLTableColumn],
+    ) -> serde_json::Value {
+        if row.is_none() {
+            return serde_json::Value::Null;
+        }
+
+        let row = row.unwrap();
+
+        let mut payload = json!({});
+        for n in 0..num_columns {
+            let value = row.as_ref(n);
+            let col = table_columns.get(n);
+
+            if value.is_none() || col.is_none() {
+                return serde_json::Value::Null;
+            }
+
+            let value = value.unwrap();
+            let col = col.unwrap();
+
+            match value {
+                BinlogValue::Value(Value::NULL) => {
+                    payload[col.column_name.as_str()] = json!(null);
+                }
+                BinlogValue::Value(v) => {
+                    let v = v.as_sql(false);
+                    payload[col.column_name.as_str()] = json!(v);
+                }
+                BinlogValue::Jsonb(_) => {}
+                BinlogValue::JsonDiff(_) => {}
+            }
+        }
+
+        payload
+    }
+
+    fn construct_kafka_message(
+        &self,
+        before: serde_json::Value,
+        after: serde_json::Value,
+        table_metadata: &MySQLTable,
+        ts: u64,
+        log_pos: u64,
+    ) -> DMSRResult<KafkaMessage<MySQLSource>> {
+        let full_table_name = format!(
+            "{}.{}",
+            table_metadata.schema_name, table_metadata.table_name
+        );
+        let kafka_message_schema = table_metadata.as_kafka_message_schema(&full_table_name)?;
+
+        let kafka_message_source = MySQLSource::new(
+            self.connector_name.clone(),
+            table_metadata.schema_name.clone(),
+            table_metadata.table_name.clone(),
+            self.config.server_id,
+            self.binlog_file_name.clone(),
+            log_pos,
+        );
+
+        let kafka_message_payload: Payload<MySQLSource> = Payload::new(
+            Some(before),
+            Some(after),
+            Operation::Create,
+            ts,
+            kafka_message_source,
+        );
+
+        let kafka_message = KafkaMessage::new(kafka_message_schema, kafka_message_payload);
+        debug!(
+            "kafka_message: {:?}\n",
+            serde_json::to_string(&kafka_message)
+        );
+        Ok(kafka_message)
     }
 
     fn retrieve_last_table_event(&self) -> DMSRResult<&TableMapEvent> {

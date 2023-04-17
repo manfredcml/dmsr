@@ -61,7 +61,7 @@ impl MySQLTable {
     pub fn as_kafka_message_schema(&self, full_table_name: &str) -> DMSRResult<Schema> {
         let mut fields = vec![];
         for col in &self.columns {
-            let field = Field::new(&col.data_type, !col.is_nullable, &col.column_name, None);
+            let field = Field::new(&col.data_type, col.is_nullable, &col.column_name, None);
             fields.push(field);
         }
 
