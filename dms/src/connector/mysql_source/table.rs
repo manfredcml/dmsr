@@ -1,7 +1,5 @@
 use crate::error::error::{DMSRError, DMSRResult};
 use crate::message::message::{Field, Schema};
-use mysql_async::binlog::events::TableMapEvent;
-use sqlparser::ast::ObjectName;
 use crate::message::mysql_source::MySQLSource;
 
 #[derive(Debug, Clone)]
@@ -36,7 +34,7 @@ pub struct MySQLTable {
 }
 
 impl MySQLTable {
-    pub fn get_column_mut(&mut self, column_name: &str) -> DMSRResult<&mut MySQLTableColumn> {
+    pub fn column_as_mut(&mut self, column_name: &str) -> DMSRResult<&mut MySQLTableColumn> {
         let col = self
             .columns
             .iter_mut()
@@ -47,7 +45,7 @@ impl MySQLTable {
         Ok(col)
     }
 
-    pub fn get_column(&self, column_name: &str) -> DMSRResult<&MySQLTableColumn> {
+    pub fn column_as_ref(&self, column_name: &str) -> DMSRResult<&MySQLTableColumn> {
         let col = self
             .columns
             .iter()
@@ -71,36 +69,4 @@ impl MySQLTable {
         let schema = Schema::new(before, after, source, full_table_name);
         Ok(schema)
     }
-}
-
-pub fn parse_table_name_from_sqlparser_object_name(
-    schema: &str,
-    object_name: &ObjectName,
-) -> DMSRResult<(String, String, String)> {
-    let mut table_name = object_name.to_string();
-    let split = table_name.split('.').collect::<Vec<&str>>();
-    let mut schema = schema.to_string();
-    if split.len() == 2 {
-        schema = split[0].to_string();
-        table_name = split[1].to_string();
-    }
-    let full_table_name = format!("{}.{}", schema, table_name);
-
-    Ok((schema, table_name, full_table_name))
-}
-
-pub fn parse_table_name_from_table_map_event(
-    event: &TableMapEvent,
-) -> DMSRResult<(String, String, String)> {
-    let mut schema = event.database_name().to_string();
-    let mut table_name = event.table_name().to_string();
-
-    let split = table_name.split('.').collect::<Vec<&str>>();
-    if split.len() == 2 {
-        schema = split[0].to_string();
-        table_name = split[1].to_string();
-    }
-    let full_table_name = format!("{}.{}", schema, table_name);
-
-    Ok((schema, table_name, full_table_name))
 }
