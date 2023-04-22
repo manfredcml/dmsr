@@ -1,6 +1,6 @@
 use crate::connector::mysql_source::metadata::MySQLSourceMetadata;
 use crate::error::error::{DMSRError, DMSRResult};
-use crate::kafka::message::{KafkaJSONField, KafkaJSONSchema, KafkaMessage, KafkaSchemaDataType};
+use crate::kafka::json::{JSONDataType, JSONSchema, JSONSchemaField};
 
 #[derive(Debug, Clone)]
 pub struct MySQLTableColumn {
@@ -25,41 +25,41 @@ impl MySQLTableColumn {
         }
     }
 
-    pub fn to_kafka_data_type(&self) -> DMSRResult<KafkaSchemaDataType> {
+    pub fn to_json_data_type(&self) -> DMSRResult<JSONDataType> {
         let split = self.data_type.split('(').collect::<Vec<&str>>();
         let data_type = split[0];
 
         let data_type = match data_type.to_lowercase().as_str() {
-            "tinyint" => KafkaSchemaDataType::Int8,
-            "boolean" => KafkaSchemaDataType::Boolean,
-            "smallint" => KafkaSchemaDataType::Int16,
-            "mediumint" => KafkaSchemaDataType::Int32,
-            "int" => KafkaSchemaDataType::Int32,
-            "integer" => KafkaSchemaDataType::Int32,
-            "bigint" => KafkaSchemaDataType::Int64,
-            "float" => KafkaSchemaDataType::Float32,
-            "double" => KafkaSchemaDataType::Float64,
-            "decimal" => KafkaSchemaDataType::Float64,
-            "date" => KafkaSchemaDataType::Date,
-            "time" => KafkaSchemaDataType::Timestamp,
-            "datetime" => KafkaSchemaDataType::Timestamp,
-            "timestamp" => KafkaSchemaDataType::Timestamp,
-            "year" => KafkaSchemaDataType::Int16,
-            "char" => KafkaSchemaDataType::String,
-            "varchar" => KafkaSchemaDataType::String,
-            "tinytext" => KafkaSchemaDataType::String,
-            "text" => KafkaSchemaDataType::String,
-            "mediumtext" => KafkaSchemaDataType::String,
-            "longtext" => KafkaSchemaDataType::String,
-            "tinyblob" => KafkaSchemaDataType::Bytes,
-            "blob" => KafkaSchemaDataType::Bytes,
-            "mediumblob" => KafkaSchemaDataType::Bytes,
-            "longblob" => KafkaSchemaDataType::Bytes,
-            "binary" => KafkaSchemaDataType::Bytes,
-            "varbinary" => KafkaSchemaDataType::Bytes,
-            "enum" => KafkaSchemaDataType::String,
-            "set" => KafkaSchemaDataType::String,
-            "json" => KafkaSchemaDataType::String,
+            "tinyint" => JSONDataType::Int8,
+            "boolean" => JSONDataType::Boolean,
+            "smallint" => JSONDataType::Int16,
+            "mediumint" => JSONDataType::Int32,
+            "int" => JSONDataType::Int32,
+            "integer" => JSONDataType::Int32,
+            "bigint" => JSONDataType::Int64,
+            "float" => JSONDataType::Float32,
+            "double" => JSONDataType::Float64,
+            "decimal" => JSONDataType::Float64,
+            "date" => JSONDataType::Date,
+            "time" => JSONDataType::Timestamp,
+            "datetime" => JSONDataType::Timestamp,
+            "timestamp" => JSONDataType::Timestamp,
+            "year" => JSONDataType::Int16,
+            "char" => JSONDataType::String,
+            "varchar" => JSONDataType::String,
+            "tinytext" => JSONDataType::String,
+            "text" => JSONDataType::String,
+            "mediumtext" => JSONDataType::String,
+            "longtext" => JSONDataType::String,
+            "tinyblob" => JSONDataType::Bytes,
+            "blob" => JSONDataType::Bytes,
+            "mediumblob" => JSONDataType::Bytes,
+            "longblob" => JSONDataType::Bytes,
+            "binary" => JSONDataType::Bytes,
+            "varbinary" => JSONDataType::Bytes,
+            "enum" => JSONDataType::String,
+            "set" => JSONDataType::String,
+            "json" => JSONDataType::String,
             _ => {
                 return Err(DMSRError::MySQLSourceConnectorError(
                     format!("Unrecognized MySQL data type: {}", data_type).into(),
@@ -100,29 +100,21 @@ impl MySQLTable {
         Ok(col)
     }
 
-    pub fn as_kafka_message_schema(&self, full_table_name: &str) -> DMSRResult<KafkaJSONSchema> {
+    pub fn as_json_message_schema(&self, full_table_name: &str) -> DMSRResult<JSONSchema> {
         let mut fields = vec![];
         for col in &self.columns {
-            let kafka_data_type = col.to_kafka_data_type()?;
+            let kafka_data_type = col.to_json_data_type()?;
             let field =
-                KafkaJSONField::new(kafka_data_type, col.is_nullable, &col.column_name, None);
+                JSONSchemaField::new(kafka_data_type, col.is_nullable, &col.column_name, None);
             fields.push(field);
         }
 
-        let before = KafkaJSONField::new(
-            KafkaSchemaDataType::Struct,
-            false,
-            "before",
-            Some(fields.clone()),
-        );
-        let after = KafkaJSONField::new(
-            KafkaSchemaDataType::Struct,
-            false,
-            "after",
-            Some(fields.clone()),
-        );
+        let before =
+            JSONSchemaField::new(JSONDataType::Struct, false, "before", Some(fields.clone()));
+        let after =
+            JSONSchemaField::new(JSONDataType::Struct, false, "after", Some(fields.clone()));
         let source = MySQLSourceMetadata::get_schema();
-        let schema = KafkaJSONSchema::new(before, after, source, full_table_name);
+        let schema = JSONSchema::new(before, after, source, full_table_name);
         Ok(schema)
     }
 }

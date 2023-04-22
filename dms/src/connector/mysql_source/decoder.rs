@@ -1,8 +1,13 @@
+use crate::connector::kind::ConnectorKind;
 use crate::connector::mysql_source::config::MySQLSourceConfig;
 use crate::connector::mysql_source::metadata::MySQLSourceMetadata;
 use crate::connector::mysql_source::table::{MySQLTable, MySQLTableColumn};
 use crate::error::error::{DMSRError, DMSRResult};
-use crate::kafka::message::{KafkaJSONMessage, KafkaJSONPayload, KafkaMessage, Operation};
+use crate::kafka::json::{
+    JSONDDLMessage, JSONDDLPayload, JSONDataType, JSONMessage, JSONPayload, JSONSchema,
+    JSONSchemaField, Operation,
+};
+use crate::kafka::message::KafkaMessage;
 use log::{debug, error};
 use mysql_async::binlog::events::{
     DeleteRowsEvent, Event, QueryEvent, RotateEvent, RowsEventRows, TableMapEvent, UpdateRowsEvent,
@@ -55,7 +60,7 @@ impl MySQLDecoder {
         match &event_type {
             EventType::QUERY_EVENT => {
                 let event = &event.read_event::<QueryEvent>()?;
-                if let Err(e) = self.parse_query_event(event) {
+                if let Err(e) = self.parse_query_event(event, ts, log_pos) {
                     error!("Error parsing query event: {:?}", e);
                 }
             }
@@ -272,29 +277,30 @@ impl MySQLDecoder {
         ts: u64,
         log_pos: u64,
         op: Operation,
-    ) -> DMSRResult<Vec<KafkaJSONMessage<MySQLSourceMetadata>>> {
-        let mut kafka_messages: Vec<KafkaJSONMessage<MySQLSourceMetadata>> = vec![];
+    ) -> DMSRResult<Vec<JSONMessage<MySQLSourceMetadata>>> {
+        let mut kafka_messages: Vec<JSONMessage<MySQLSourceMetadata>> = vec![];
 
         for (before, after) in rows_data {
             let full_table_name = format!(
                 "{}.{}",
                 table_metadata.schema_name, table_metadata.table_name
             );
-            let msg_schema = table_metadata.as_kafka_message_schema(&full_table_name)?;
+            let msg_schema = table_metadata.as_json_message_schema(&full_table_name)?;
 
             let msg_source = MySQLSourceMetadata::new(
-                self.connector_name.to_string(),
-                table_metadata.schema_name.clone(),
-                table_metadata.table_name.clone(),
+                &self.connector_name,
+                &self.connector_config.db,
+                Some(&table_metadata.schema_name),
+                &table_metadata.table_name,
                 self.connector_config.server_id,
-                self.binlog_file_name.clone(),
+                &self.binlog_file_name,
                 log_pos,
             );
 
-            let msg_payload: KafkaJSONPayload<MySQLSourceMetadata> =
-                KafkaJSONPayload::new(Some(before), Some(after), op.clone(), ts, msg_source);
+            let msg_payload: JSONPayload<MySQLSourceMetadata> =
+                JSONPayload::new(Some(before), Some(after), op.clone(), ts, msg_source);
 
-            kafka_messages.push(KafkaJSONMessage::new(msg_schema, msg_payload));
+            kafka_messages.push(JSONMessage::new(msg_schema, msg_payload));
         }
 
         Ok(kafka_messages)
@@ -310,7 +316,7 @@ impl MySQLDecoder {
         Ok(())
     }
 
-    fn parse_query_event(&mut self, event: &QueryEvent) -> DMSRResult<()> {
+    fn parse_query_event(&mut self, event: &QueryEvent, ts: u64, log_pos: u64) -> DMSRResult<()> {
         debug!("QUERY_EVENT: {:?}\n", event);
         let schema = event.schema().to_string();
         let query = event.query().to_string();
@@ -344,6 +350,39 @@ impl MySQLDecoder {
         }
 
         Ok(())
+    }
+
+    fn query_to_kafka_message(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        ddl: &str,
+        ts: u64,
+        log_pos: u64,
+    ) -> DMSRResult<KafkaMessage> {
+        let metadata = MySQLSourceMetadata::new(
+            &self.connector_name,
+            &self.connector_config.db,
+            schema,
+            table,
+            self.connector_config.server_id,
+            &self.binlog_file_name,
+            log_pos,
+        );
+
+        let schema = JSONSchema::new_ddl(
+            MySQLSourceMetadata::get_schema(),
+            &serde_json::to_string(&ConnectorKind::MySQLSource)?,
+        );
+
+        let payload: JSONDDLPayload<MySQLSourceMetadata> = JSONDDLPayload::new(ddl, ts, metadata);
+
+        let json_message = JSONDDLMessage::new(schema, payload);
+
+        json_message.to_kafka_message(
+            format!("{}-{}", self.connector_name, self.connector_config.db),
+            None,
+        )
     }
 
     fn parse_create_table_statement(
@@ -415,7 +454,6 @@ impl MySQLDecoder {
         };
 
         self.table_metadata_map.insert(full_table_name, mysql_table);
-
         Ok(())
     }
 

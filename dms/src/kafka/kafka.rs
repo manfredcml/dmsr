@@ -1,6 +1,6 @@
 use crate::error::error::DMSRResult;
 use crate::kafka::config::KafkaConfig;
-use crate::kafka::message::{KafkaJSONMessage, KafkaMessage};
+use crate::kafka::message::KafkaMessage;
 use log::debug;
 use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
 use rdkafka::client::DefaultClientContext;
