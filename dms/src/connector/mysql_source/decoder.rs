@@ -175,7 +175,10 @@ impl MySQLDecoder {
             .iter()
             .filter_map(|m| {
                 let metadata = &m.payload.metadata;
-                let topic = format!("{}.{}", metadata.db, metadata.table);
+                let topic = format!(
+                    "{}-{}.{}",
+                    &self.connector_name, metadata.db, metadata.table
+                );
                 m.to_kafka_message(topic, None).ok()
             })
             .collect();

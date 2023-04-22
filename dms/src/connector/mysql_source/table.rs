@@ -25,44 +25,44 @@ impl MySQLTableColumn {
         }
     }
 
-    pub fn to_kafka_connect_data_type(&self) -> DMSRResult<&str> {
+    pub fn to_kafka_data_type(&self) -> DMSRResult<KafkaSchemaDataType> {
         let split = self.data_type.split('(').collect::<Vec<&str>>();
         let data_type = split[0];
 
         let data_type = match data_type.to_lowercase().as_str() {
-            "tinyint" => "int8",
-            "boolean" => "boolean",
-            "smallint" => "int16",
-            "mediumint" => "int32",
-            "int" => "int32",
-            "integer" => "int32",
-            "bigint" => "int64",
-            "float" => "float32",
-            "double" => "float64",
-            "decimal" => "float64",
-            "date" => "date",
-            "time" => "time",
-            "datetime" => "timestamp",
-            "timestamp" => "timestamp",
-            "year" => "int32",
-            "char" => "string",
-            "varchar" => "string",
-            "tinytext" => "string",
-            "text" => "string",
-            "mediumtext" => "string",
-            "longtext" => "string",
-            "tinyblob" => "bytes",
-            "blob" => "bytes",
-            "mediumblob" => "bytes",
-            "longblob" => "bytes",
-            "binary" => "bytes",
-            "varbinary" => "bytes",
-            "enum" => "string",
-            "set" => "string",
-            "json" => "string",
+            "tinyint" => KafkaSchemaDataType::Int8,
+            "boolean" => KafkaSchemaDataType::Boolean,
+            "smallint" => KafkaSchemaDataType::Int16,
+            "mediumint" => KafkaSchemaDataType::Int32,
+            "int" => KafkaSchemaDataType::Int32,
+            "integer" => KafkaSchemaDataType::Int32,
+            "bigint" => KafkaSchemaDataType::Int64,
+            "float" => KafkaSchemaDataType::Float32,
+            "double" => KafkaSchemaDataType::Float64,
+            "decimal" => KafkaSchemaDataType::Float64,
+            "date" => KafkaSchemaDataType::Date,
+            "time" => KafkaSchemaDataType::Timestamp,
+            "datetime" => KafkaSchemaDataType::Timestamp,
+            "timestamp" => KafkaSchemaDataType::Timestamp,
+            "year" => KafkaSchemaDataType::Int16,
+            "char" => KafkaSchemaDataType::String,
+            "varchar" => KafkaSchemaDataType::String,
+            "tinytext" => KafkaSchemaDataType::String,
+            "text" => KafkaSchemaDataType::String,
+            "mediumtext" => KafkaSchemaDataType::String,
+            "longtext" => KafkaSchemaDataType::String,
+            "tinyblob" => KafkaSchemaDataType::Bytes,
+            "blob" => KafkaSchemaDataType::Bytes,
+            "mediumblob" => KafkaSchemaDataType::Bytes,
+            "longblob" => KafkaSchemaDataType::Bytes,
+            "binary" => KafkaSchemaDataType::Bytes,
+            "varbinary" => KafkaSchemaDataType::Bytes,
+            "enum" => KafkaSchemaDataType::String,
+            "set" => KafkaSchemaDataType::String,
+            "json" => KafkaSchemaDataType::String,
             _ => {
                 return Err(DMSRError::MySQLSourceConnectorError(
-                    format!("Unknown data type: {}", data_type).into(),
+                    format!("Unrecognized MySQL data type: {}", data_type).into(),
                 ))
             }
         };
@@ -103,13 +103,9 @@ impl MySQLTable {
     pub fn as_kafka_message_schema(&self, full_table_name: &str) -> DMSRResult<KafkaJSONSchema> {
         let mut fields = vec![];
         for col in &self.columns {
-            let kafka_connect_data_type = col.to_kafka_connect_data_type()?;
-            let field = KafkaJSONField::new(
-                KafkaSchemaDataType::Struct,
-                col.is_nullable,
-                &col.column_name,
-                None,
-            );
+            let kafka_data_type = col.to_kafka_data_type()?;
+            let field =
+                KafkaJSONField::new(kafka_data_type, col.is_nullable, &col.column_name, None);
             fields.push(field);
         }
 
