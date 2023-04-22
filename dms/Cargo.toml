@@ -27,6 +27,7 @@ chrono = "0.4.24"
 strum = "0.24.1"
 strum_macros = "0.24.1"
 log = "0.4.17"
+async-stream = "0.3.5"
 
 [dependencies.tokio-postgres]
 git = "https://github.com/MaterializeInc/rust-postgres"

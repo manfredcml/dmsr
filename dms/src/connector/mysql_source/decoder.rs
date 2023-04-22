@@ -28,16 +28,16 @@ enum RowsEvent<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct MySQLDecoder<'a> {
+pub struct MySQLDecoder {
     table_metadata_map: HashMap<String, MySQLTable>,
     last_table_map_event: Option<TableMapEvent<'static>>,
     binlog_file_name: String,
-    connector_name: &'a str,
-    connector_config: &'a MySQLSourceConfig,
+    connector_name: String,
+    connector_config: MySQLSourceConfig,
 }
 
-impl<'a> MySQLDecoder<'a> {
-    pub fn new(connector_name: &'a str, connector_config: &'a MySQLSourceConfig) -> Self {
+impl MySQLDecoder {
+    pub fn new(connector_name: String, connector_config: MySQLSourceConfig) -> Self {
         MySQLDecoder {
             table_metadata_map: HashMap::new(),
             last_table_map_event: None,

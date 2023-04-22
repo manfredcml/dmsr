@@ -16,9 +16,9 @@ use dms::connector::kind::ConnectorKind;
 use dms::connector::mysql_source::config::MySQLSourceConfig;
 use dms::connector::mysql_source::connector::MySQLSourceConnector;
 use dms::connector::postgres_sink::config::PostgresSinkConfig;
-use dms::connector::postgres_sink::connector::PostgresSinkConnector;
+// use dms::connector::postgres_sink::connector::PostgresSinkConnector;
 use dms::connector::postgres_source::config::PostgresSourceConfig;
-use dms::connector::postgres_source::connector::PostgresSourceConnector;
+// use dms::connector::postgres_source::connector::PostgresSourceConnector;
 use dms::error::error::{DMSRError, DMSRResult};
 use dms::kafka::config::KafkaConfig;
 use dms::kafka::kafka::Kafka;
@@ -92,22 +92,22 @@ async fn subscribe_to_config_topic(
 
         match connector_type {
             ConnectorKind::PostgresSource => {
-                start_connector::<PostgresSourceConfig, PostgresSourceConnector>(
-                    &kafka.config,
-                    connector_name,
-                    connector_config,
-                    active_connectors,
-                )
-                .await?;
+                // start_connector::<PostgresSourceConfig, PostgresSourceConnector>(
+                //     &kafka.config,
+                //     connector_name,
+                //     connector_config,
+                //     active_connectors,
+                // )
+                // .await?;
             }
             ConnectorKind::PostgresSink => {
-                start_connector::<PostgresSinkConfig, PostgresSinkConnector>(
-                    &kafka.config,
-                    connector_name,
-                    connector_config,
-                    active_connectors,
-                )
-                .await?;
+                // start_connector::<PostgresSinkConfig, PostgresSinkConnector>(
+                //     &kafka.config,
+                //     connector_name,
+                //     connector_config,
+                //     active_connectors,
+                // )
+                // .await?;
             }
             ConnectorKind::MySQLSource => {
                 start_connector::<MySQLSourceConfig, MySQLSourceConnector>(
@@ -151,7 +151,6 @@ where
         connector.to_kafka(&kafka, &mut stream).await?;
 
         info!("Stream stopped");
-        info!("{:?}", r);
 
         Ok(())
     });

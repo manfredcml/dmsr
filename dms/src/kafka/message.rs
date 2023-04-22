@@ -56,7 +56,11 @@ impl KafkaJSONSchema {
         N: Into<String>,
     {
         let mut fields = vec![before, after, metadata];
-        fields.append(&mut Self::get_standard_field_schema());
+        let mut other_fields = vec![
+            KafkaJSONField::new(KafkaSchemaDataType::String, false, "op", None),
+            KafkaJSONField::new(KafkaSchemaDataType::Int64, false, "ts_ms", None),
+        ];
+        fields.append(other_fields.as_mut());
 
         KafkaJSONSchema {
             r#type: KafkaSchemaDataType::Struct,
@@ -64,13 +68,6 @@ impl KafkaJSONSchema {
             optional: false,
             name: name.into(),
         }
-    }
-
-    fn get_standard_field_schema() -> Vec<KafkaJSONField> {
-        vec![
-            KafkaJSONField::new(KafkaSchemaDataType::String, false, "op", None),
-            KafkaJSONField::new(KafkaSchemaDataType::Int64, false, "ts_ms", None),
-        ]
     }
 }
 
