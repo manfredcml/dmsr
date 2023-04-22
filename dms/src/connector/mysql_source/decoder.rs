@@ -200,6 +200,13 @@ impl MySQLDecoder {
                     Self::parse_binlog_rows(r.1, num_columns, table_columns),
                 )
             })
+            .filter_map(|r| {
+                if r.0.is_ok() && r.1.is_ok() {
+                    Some((r.0.unwrap(), r.1.unwrap()))
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -207,9 +214,9 @@ impl MySQLDecoder {
         row: Option<BinlogRow>,
         num_columns: usize,
         table_columns: &[MySQLTableColumn],
-    ) -> serde_json::Value {
+    ) -> DMSRResult<serde_json::Value> {
         if row.is_none() {
-            return serde_json::Value::Null;
+            return Ok(serde_json::Value::Null);
         }
         let row = row.unwrap();
         let mut payload = json!({});
@@ -218,7 +225,7 @@ impl MySQLDecoder {
             let col = table_columns.get(n);
 
             if value.is_none() || col.is_none() {
-                return serde_json::Value::Null;
+                return Ok(serde_json::Value::Null);
             }
 
             let value = value.unwrap();
@@ -229,8 +236,25 @@ impl MySQLDecoder {
                 BinlogValue::Value(Value::NULL) => {
                     payload[col_name] = json!(null);
                 }
+                BinlogValue::Value(Value::Bytes(v)) => {
+                    let v = String::from_utf8(v.to_vec())?;
+                    payload[col_name] = json!(v);
+                }
+                BinlogValue::Value(Value::Int(v)) => {
+                    payload[col_name] = json!(v);
+                }
+                BinlogValue::Value(Value::UInt(v)) => {
+                    payload[col_name] = json!(v);
+                }
+                BinlogValue::Value(Value::Float(v)) => {
+                    payload[col_name] = json!(v);
+                }
+                BinlogValue::Value(Value::Double(v)) => {
+                    payload[col_name] = json!(v);
+                }
                 BinlogValue::Value(v) => {
-                    let v = v.as_sql(false);
+                    let v = v.as_sql(true);
+                    let v = v.trim_matches('\'');
                     payload[col_name] = json!(v);
                 }
                 BinlogValue::Jsonb(_) => {}
@@ -238,7 +262,7 @@ impl MySQLDecoder {
             }
         }
 
-        payload
+        Ok(payload)
     }
 
     fn rows_data_into_kafka_message(
