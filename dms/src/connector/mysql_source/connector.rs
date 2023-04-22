@@ -1,16 +1,15 @@
-use crate::connector::connector::Connector;
+use crate::connector::connector::{KafkaMessageStream, SourceConnector};
 use crate::connector::mysql_source::config::MySQLSourceConfig;
 use crate::connector::mysql_source::decoder::MySQLDecoder;
-use crate::connector::mysql_source::table::MySQLTable;
-use crate::error::error::{DMSRError, DMSRResult};
+use crate::connector::mysql_source::metadata::MySQLSourceMetadata;
+use crate::error::error::DMSRResult;
 use crate::kafka::kafka::Kafka;
-use crate::message::message::{KafkaMessage, Operation, Payload};
-use crate::message::mysql_source::MySQLSource;
+use crate::kafka::message::{KafkaJSONMessage, KafkaMessage};
 use async_trait::async_trait;
-use futures::StreamExt;
-use mysql_async::binlog::events::{Event, TableMapEvent};
-use mysql_async::{BinlogRequest, BinlogStream, Pool, Value};
-use std::collections::HashMap;
+use futures::{Stream, StreamExt};
+use log::error;
+use mysql_async::{BinlogRequest, BinlogStream, Pool};
+use std::pin::Pin;
 
 pub struct MySQLSourceConnector {
     config: MySQLSourceConfig,
@@ -19,7 +18,7 @@ pub struct MySQLSourceConnector {
 }
 
 #[async_trait]
-impl Connector for MySQLSourceConnector {
+impl SourceConnector for MySQLSourceConnector {
     type Config = MySQLSourceConfig;
 
     async fn new(connector_name: String, config: &MySQLSourceConfig) -> DMSRResult<Box<Self>> {
@@ -40,17 +39,37 @@ impl Connector for MySQLSourceConnector {
         }))
     }
 
-    async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()> {
-        let mut decoder = MySQLDecoder::new(self.connector_name.clone(), self.config.server_id);
+    async fn cdc_events_to_stream(&mut self) -> DMSRResult<KafkaMessageStream> {
+        let mut decoder = MySQLDecoder::new(&self.connector_name, &self.config);
 
-        while let Some(event) = self.cdc_stream.next().await {
-            let event = event?;
-            let kafka_messages = decoder.parse(event)?;
-            for msg in kafka_messages {
-                println!("kafka_message: {:?}", msg);
-            }
+        let stream = futures::stream::unfold(decoder, |mut decoder| async move {
+            let event = match self.cdc_stream.next().await {
+                Some(Ok(event)) => event,
+                Some(Err(err)) => return Some((Err(err.into()), decoder)),
+                None => return None,
+            };
+
+            let messages = match decoder.parse(event) {
+                Ok(kafka_messages) => kafka_messages,
+                Err(err) => return Some((Err(err), decoder)),
+            };
+
+            Some((Ok(messages), decoder))
+        });
+
+        let stream = stream
+            .filter_map(|result| async move {
+                result.ok()
+            })
+            .flat_map(|kafka_messages| futures::stream::iter(kafka_messages));
+
+        Ok(Box::pin(stream))
+    }
+
+    async fn to_kafka(&self, kafka: &Kafka, stream: &mut KafkaMessageStream) -> DMSRResult<()> {
+        while let Some(message) = stream.next().await {
+            kafka.ingest(message).await?;
         }
-
         Ok(())
     }
 }

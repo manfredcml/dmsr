@@ -11,7 +11,7 @@ use crate::state::{AppState, MutexActiveConnectors};
 use actix_web::{web, App, HttpServer};
 use clap::Parser;
 use dms::connector::config::ConnectorConfig;
-use dms::connector::connector::Connector;
+use dms::connector::connector::SourceConnector;
 use dms::connector::kind::ConnectorKind;
 use dms::connector::mysql_source::config::MySQLSourceConfig;
 use dms::connector::mysql_source::connector::MySQLSourceConnector;
@@ -132,7 +132,7 @@ async fn start_connector<ConfigType, ConnectorType>(
 ) -> DMSRResult<()>
 where
     ConfigType: serde::de::DeserializeOwned + Send + Sync,
-    ConnectorType: Connector<Config = ConfigType> + Send + Sync,
+    ConnectorType: SourceConnector<Config = ConfigType> + Send + Sync,
 {
     let kafka_config = kafka_config.clone();
     let connector_name_clone = connector_name.clone();
@@ -146,8 +146,9 @@ where
         info!("Connecting to data source...");
         let mut connector = ConnectorType::new(connector_name, &config).await?;
 
-        info!("Starting stream...");
-        let r = connector.stream(&kafka).await;
+        info!("Preparing stream...");
+        let mut stream = connector.cdc_events_to_stream().await?;
+        connector.to_kafka(&kafka, &mut stream).await?;
 
         info!("Stream stopped");
         info!("{:?}", r);

@@ -1,8 +1,8 @@
 use crate::connector::mysql_source::config::MySQLSourceConfig;
+use crate::connector::mysql_source::metadata::MySQLSourceMetadata;
 use crate::connector::mysql_source::table::{MySQLTable, MySQLTableColumn};
 use crate::error::error::{DMSRError, DMSRResult};
-use crate::message::message::{KafkaMessage, Operation, Payload};
-use crate::message::mysql_source::MySQLSource;
+use crate::kafka::message::{KafkaJSONMessage, KafkaJSONPayload, KafkaMessage, Operation};
 use log::{debug, error};
 use mysql_async::binlog::events::{
     DeleteRowsEvent, Event, QueryEvent, RotateEvent, RowsEventRows, TableMapEvent, UpdateRowsEvent,
@@ -28,26 +28,26 @@ enum RowsEvent<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct MySQLDecoder {
+pub struct MySQLDecoder<'a> {
     table_metadata_map: HashMap<String, MySQLTable>,
     last_table_map_event: Option<TableMapEvent<'static>>,
-    binlog_file: String,
-    connector_name: String,
-    server_id: u32,
+    binlog_file_name: String,
+    connector_name: &'a str,
+    connector_config: &'a MySQLSourceConfig,
 }
 
-impl MySQLDecoder {
-    pub fn new(connector_name: String, server_id: u32) -> Self {
+impl<'a> MySQLDecoder<'a> {
+    pub fn new(connector_name: &'a str, connector_config: &'a MySQLSourceConfig) -> Self {
         MySQLDecoder {
             table_metadata_map: HashMap::new(),
             last_table_map_event: None,
-            binlog_file: String::default(),
+            binlog_file_name: String::default(),
             connector_name,
-            server_id,
+            connector_config,
         }
     }
 
-    pub fn parse(&mut self, event: Event) -> DMSRResult<Vec<KafkaMessage<MySQLSource>>> {
+    pub fn parse(&mut self, event: Event) -> DMSRResult<Vec<KafkaMessage>> {
         let ts = 1000 * (event.fde().create_timestamp() as u64);
         let log_pos = event.header().log_pos() as u64;
         let event_type = event.header().event_type()?;
@@ -123,7 +123,7 @@ impl MySQLDecoder {
         event: &RowsEvent,
         ts: u64,
         log_pos: u64,
-    ) -> DMSRResult<Vec<KafkaMessage<MySQLSource>>> {
+    ) -> DMSRResult<Vec<KafkaMessage>> {
         let last_table_map_event = self.last_table_map_event_as_ref()?;
 
         let (schema, table_name) =
@@ -135,42 +135,50 @@ impl MySQLDecoder {
         let table_columns = &table_metadata.columns;
         let num_columns = table_columns.len();
 
-        let kafka_messages: Vec<KafkaMessage<MySQLSource>>;
-        match event {
+        let kafka_messages = match event {
             RowsEvent::Write(e) => {
                 let rows = e.rows(last_table_map_event);
                 let rows_data = self.parse_rows_in_rows_event(rows, num_columns, table_columns);
-                kafka_messages = self.rows_data_into_kafka_message(
+                self.rows_data_into_kafka_message(
                     rows_data,
                     table_metadata,
                     ts,
                     log_pos,
                     Operation::Create,
-                )?;
+                )?
             }
             RowsEvent::Update(e) => {
                 let rows = e.rows(last_table_map_event);
                 let rows_data = self.parse_rows_in_rows_event(rows, num_columns, table_columns);
-                kafka_messages = self.rows_data_into_kafka_message(
+                self.rows_data_into_kafka_message(
                     rows_data,
                     table_metadata,
                     ts,
                     log_pos,
-                    Operation::Create,
-                )?;
+                    Operation::Update,
+                )?
             }
             RowsEvent::Delete(e) => {
                 let rows = e.rows(last_table_map_event);
                 let rows_data = self.parse_rows_in_rows_event(rows, num_columns, table_columns);
-                kafka_messages = self.rows_data_into_kafka_message(
+                self.rows_data_into_kafka_message(
                     rows_data,
                     table_metadata,
                     ts,
                     log_pos,
-                    Operation::Create,
-                )?;
+                    Operation::Delete,
+                )?
             }
-        }
+        };
+
+        let kafka_messages: Vec<KafkaMessage> = kafka_messages
+            .iter()
+            .filter_map(|m| {
+                let metadata = &m.payload.metadata;
+                let topic = format!("{}.{}", metadata.db, metadata.table);
+                m.to_kafka_message(topic, None).ok()
+            })
+            .collect();
 
         Ok(kafka_messages)
     }
@@ -212,14 +220,15 @@ impl MySQLDecoder {
 
             let value = value.unwrap();
             let col = col.unwrap();
+            let col_name = col.column_name.as_str();
 
             match value {
                 BinlogValue::Value(Value::NULL) => {
-                    payload[col.column_name.as_str()] = json!(null);
+                    payload[col_name] = json!(null);
                 }
                 BinlogValue::Value(v) => {
                     let v = v.as_sql(false);
-                    payload[col.column_name.as_str()] = json!(v);
+                    payload[col_name] = json!(v);
                 }
                 BinlogValue::Jsonb(_) => {}
                 BinlogValue::JsonDiff(_) => {}
@@ -236,8 +245,8 @@ impl MySQLDecoder {
         ts: u64,
         log_pos: u64,
         op: Operation,
-    ) -> DMSRResult<Vec<KafkaMessage<MySQLSource>>> {
-        let mut kafka_messages: Vec<KafkaMessage<MySQLSource>> = vec![];
+    ) -> DMSRResult<Vec<KafkaJSONMessage<MySQLSourceMetadata>>> {
+        let mut kafka_messages: Vec<KafkaJSONMessage<MySQLSourceMetadata>> = vec![];
 
         for (before, after) in rows_data {
             let full_table_name = format!(
@@ -246,26 +255,26 @@ impl MySQLDecoder {
             );
             let msg_schema = table_metadata.as_kafka_message_schema(&full_table_name)?;
 
-            let msg_source = MySQLSource::new(
+            let msg_source = MySQLSourceMetadata::new(
                 self.connector_name.to_string(),
                 table_metadata.schema_name.clone(),
                 table_metadata.table_name.clone(),
-                self.server_id,
-                self.binlog_file.clone(),
+                self.connector_config.server_id,
+                self.binlog_file_name.clone(),
                 log_pos,
             );
 
-            let msg_payload: Payload<MySQLSource> =
-                Payload::new(Some(before), Some(after), op.clone(), ts, msg_source);
+            let msg_payload: KafkaJSONPayload<MySQLSourceMetadata> =
+                KafkaJSONPayload::new(Some(before), Some(after), op.clone(), ts, msg_source);
 
-            kafka_messages.push(KafkaMessage::new(msg_schema, msg_payload));
+            kafka_messages.push(KafkaJSONMessage::new(msg_schema, msg_payload));
         }
 
         Ok(kafka_messages)
     }
 
     fn parse_rotate_event(&mut self, event: &RotateEvent) -> DMSRResult<()> {
-        self.binlog_file = event.name().to_string();
+        self.binlog_file_name = event.name().to_string();
         Ok(())
     }
 
@@ -280,33 +289,34 @@ impl MySQLDecoder {
         let query = event.query().to_string();
         let dialect = MySqlDialect {};
         let ast: Vec<Statement> = Parser::parse_sql(&dialect, query.as_str())?;
-        let Some(ast) = ast.first() else {
-            return Err(DMSRError::MySQLSourceConnectorError(
-                format!("Query not supported by parser: {}", query).into(),
-            ));
-        };
 
-        match &ast {
+        let stmt = ast.first().ok_or(DMSRError::MySQLSourceConnectorError(
+            format!("Query not supported by parser: {}", query).into(),
+        ))?;
+
+        match stmt {
             Statement::CreateTable {
                 name,
                 columns,
                 constraints,
                 ..
             } => {
-                self.parse_create_table_statement(&schema, &name, &columns, &constraints)?;
+                self.parse_create_table_statement(&schema, name, columns, constraints)?;
             }
             Statement::AlterTable {
                 name, operation, ..
             } => {
-                self.parse_alter_table_statement(&schema, &name, &operation)?;
+                self.parse_alter_table_statement(&schema, name, operation)?;
             }
             Statement::Truncate { table_name, .. } => {}
-            _ => {}
+            _ => {
+                return Err(DMSRError::MySQLSourceConnectorError(
+                    format!("Query not supported by parser: {}", query).into(),
+                ));
+            }
         }
 
-        Err(DMSRError::MySQLSourceConnectorError(
-            format!("Query not supported by parser: {}", query).into(),
-        ))
+        Ok(())
     }
 
     fn parse_create_table_statement(

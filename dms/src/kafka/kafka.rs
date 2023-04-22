@@ -1,6 +1,7 @@
 use crate::error::error::DMSRResult;
 use crate::kafka::config::KafkaConfig;
-use crate::message::message::KafkaMessage;
+use crate::kafka::message::{KafkaJSONMessage, KafkaMessage};
+use log::debug;
 use rdkafka::admin::{AdminClient, AdminOptions, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
@@ -51,30 +52,24 @@ impl Kafka {
         Ok(())
     }
 
-    pub async fn ingest<Source>(
-        &self,
-        topic: String,
-        message: &KafkaMessage<Source>,
-        key: Option<String>,
-    ) -> DMSRResult<()> where Source: serde::Serialize + serde::de::DeserializeOwned {
-        let message = serde_json::to_string(message)?;
+    pub async fn ingest(&self, message: KafkaMessage) -> DMSRResult<()> {
+        let topic = &message.topic;
+        let value = &message.value;
+        let key = &message.key.unwrap_or_default();
+        let mut record = rdkafka::producer::FutureRecord::to(&topic).payload(value);
 
-        let mut record =
-            rdkafka::producer::FutureRecord::to(topic.as_str()).payload(message.as_str());
-
-        let key = key.unwrap_or_default();
         if !key.is_empty() {
-            record = record.key(key.as_str());
+            record = record.key(key);
         }
 
         let status = self.producer.send(record, Duration::from_secs(0)).await;
         return match status {
             Ok(delivery_status) => {
-                println!("Delivery status: {:?}", delivery_status);
+                debug!("Delivery status: {:?}\n", delivery_status);
                 Ok(())
             }
             Err((err, message)) => {
-                println!("Send failed: {:?}: {:?}", err, message);
+                debug!("Send failed: {:?}: {:?}\n", err, message);
                 Err(err.into())
             }
         };
