@@ -114,7 +114,7 @@ impl MySQLTable {
         let after =
             JSONSchemaField::new(JSONDataType::Struct, false, "after", Some(fields.clone()));
         let source = MySQLSourceMetadata::get_schema();
-        let schema = JSONSchema::new(before, after, source, full_table_name);
+        let schema = JSONSchema::new(before, after, source, &format!("{}.Row", full_table_name));
         Ok(schema)
     }
 }

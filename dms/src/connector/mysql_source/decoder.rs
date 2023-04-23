@@ -184,7 +184,7 @@ impl MySQLDecoder {
                 let metadata = &m.payload.metadata;
                 let topic = format!(
                     "{}-{}.{}",
-                    &self.connector_name, metadata.db, metadata.table
+                    &self.connector_name, &schema, metadata.table
                 );
                 m.to_kafka_message(topic, None).ok()
             })
@@ -406,7 +406,7 @@ impl MySQLDecoder {
 
         let schema = JSONSchema::new_ddl(
             MySQLSourceMetadata::get_schema(),
-            &ConnectorKind::MySQLSource.to_string(),
+            &format!("{}.{}.DDL", schema, table),
         );
 
         let payload: JSONDDLPayload<MySQLSourceMetadata> = JSONDDLPayload::new(ddl, ts, metadata);
@@ -495,6 +495,7 @@ impl MySQLDecoder {
         table: &str,
         operation: &AlterTableOperation,
     ) -> DMSRResult<()> {
+        debug!("Parsing alter table statement: {:?}", operation);
         let full_table_name = format!("{}.{}", schema, table);
 
         match operation {
