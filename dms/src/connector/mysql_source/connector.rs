@@ -39,8 +39,10 @@ impl SourceConnector for MySQLSourceConnector {
         let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
         let mut decoder = MySQLDecoder::new(self.connector_name.clone(), self.config.clone());
 
+        debug!("Creating Kafka message stream...");
         let stream: KafkaMessageStream = Box::pin(async_stream::stream! {
             while let Some(event) = cdc_stream.next().await {
+                debug!("Received event from MySQL: {:?}", event);
                 let event = event?;
                 let kafka_messages = decoder.parse(event)?;
                 for msg in kafka_messages {
@@ -58,8 +60,8 @@ impl SourceConnector for MySQLSourceConnector {
         stream: &mut KafkaMessageStream,
     ) -> DMSRResult<()> {
         while let Some(message) = stream.next().await {
-            let message = message?;
             debug!("Sending message to kafka: {:?}", message);
+            let message = message?;
             kafka.ingest(message).await?;
         }
         Ok(())

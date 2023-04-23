@@ -19,7 +19,7 @@ use mysql_async::Value;
 use serde_json::json;
 use sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, Ident, ObjectName,
-    Statement, TableConstraint,
+    ObjectType, Statement, TableConstraint,
 };
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
@@ -56,11 +56,12 @@ impl MySQLDecoder {
         let log_pos = event.header().log_pos() as u64;
         let event_type = event.header().event_type()?;
 
+        let mut kafka_messages: Vec<KafkaMessage> = vec![];
         match &event_type {
             EventType::QUERY_EVENT => {
                 let event = &event.read_event::<QueryEvent>()?;
                 if let Ok(message) = self.parse_query_event(event, ts, log_pos) {
-                    return Ok(vec![message]);
+                    kafka_messages = message;
                 }
             }
             EventType::TABLE_MAP_EVENT => {
@@ -81,7 +82,7 @@ impl MySQLDecoder {
 
                 match self.parse_rows_event(&event, ts, log_pos) {
                     Ok(messages) => {
-                        return Ok(messages);
+                        kafka_messages = messages;
                     }
                     Err(e) => {
                         error!("Error parsing write rows event: {:?}", e);
@@ -119,9 +120,7 @@ impl MySQLDecoder {
             }
         }
 
-        Err(DMSRError::MySQLSourceConnectorError(
-            format!("Event type not supported: {:?}", event_type).into(),
-        ))
+        Ok(kafka_messages)
     }
 
     fn parse_rows_event(
@@ -133,7 +132,7 @@ impl MySQLDecoder {
         let last_table_map_event = self.last_table_map_event_as_ref()?;
 
         let (schema, table_name) =
-            Self::parse_schema_and_table_from_table_map_event(last_table_map_event)?;
+            Self::parse_schema_table_from_table_map_event(last_table_map_event)?;
 
         let full_table_name = format!("{}.{}", schema, table_name);
 
@@ -291,7 +290,7 @@ impl MySQLDecoder {
             let msg_source = MySQLSourceMetadata::new(
                 &self.connector_name,
                 &self.connector_config.db,
-                Some(&table_metadata.schema_name),
+                &table_metadata.schema_name,
                 &table_metadata.table_name,
                 self.connector_config.server_id,
                 &self.binlog_file_name,
@@ -322,19 +321,18 @@ impl MySQLDecoder {
         event: &QueryEvent,
         ts: u64,
         log_pos: u64,
-    ) -> DMSRResult<KafkaMessage> {
+    ) -> DMSRResult<Vec<KafkaMessage>> {
         debug!("QUERY_EVENT: {:?}\n", event);
 
         let schema = event.schema().to_string();
-        debug!("SCHEMA: {:?}\n", schema);
-
         let query = event.query().to_string();
         let dialect = MySqlDialect {};
-        let ast: Vec<Statement> = Parser::parse_sql(&dialect, query.as_str())?;
+        let ast: Vec<Statement> = Parser::parse_sql(&dialect, &query)?;
 
         let stmt = ast.first().ok_or(DMSRError::MySQLSourceConnectorError(
             format!("Query not supported by parser: {}", query).into(),
         ))?;
+        debug!("SQL statement: {:?}\n", stmt);
 
         let kafka_message = match stmt {
             Statement::CreateTable {
@@ -343,29 +341,47 @@ impl MySQLDecoder {
                 constraints,
                 ..
             } => {
-                let (schema, table) =
-                    self.parse_create_table_statement(&schema, name, columns, constraints)?;
-                self.query_to_kafka_message(Some(&schema), &table, &query, ts, log_pos)
+                let (schema, table) = Self::parse_schema_table_from_sqlparser(&schema, name)?;
+                self.parse_create_table_statement(&schema, &table, columns, constraints)?;
+                let msg =
+                    self.query_event_to_kafka_message(&schema, &table, &query, ts, log_pos)?;
+                Ok(vec![msg])
             }
-            // Statement::AlterTable {
-            //     name, operation, ..
-            // } => {
-            //     self.parse_alter_table_statement(&schema, name, operation)?;
-            // }
-            // Statement::Truncate { table_name, .. } => {}
-            _ => {
-                return Err(DMSRError::MySQLSourceConnectorError(
-                    format!("Query not supported by parser: {}", query).into(),
-                ));
+            Statement::AlterTable {
+                name, operation, ..
+            } => {
+                let (schema, table) = Self::parse_schema_table_from_sqlparser(&schema, name)?;
+                self.parse_alter_table_statement(&schema, &table, operation)?;
+                let msg =
+                    self.query_event_to_kafka_message(&schema, &table, &query, ts, log_pos)?;
+                Ok(vec![msg])
             }
+            Statement::Drop {
+                object_type, names, ..
+            } => {
+                let dropped_tables = self.parse_drop_statement(&schema, object_type, names)?;
+
+                let msg: Vec<KafkaMessage> = dropped_tables
+                    .iter()
+                    .filter_map(|(schema, table)| {
+                        self.query_event_to_kafka_message(schema, table, &query, ts, log_pos)
+                            .ok()
+                    })
+                    .collect();
+
+                Ok(msg)
+            }
+            _ => Err(DMSRError::MySQLSourceConnectorError(
+                format!("Query not supported by parser: {}", query).into(),
+            )),
         };
 
         kafka_message
     }
 
-    fn query_to_kafka_message(
+    fn query_event_to_kafka_message(
         &self,
-        schema: Option<&str>,
+        schema: &str,
         table: &str,
         ddl: &str,
         ts: u64,
@@ -399,13 +415,10 @@ impl MySQLDecoder {
     fn parse_create_table_statement(
         &mut self,
         schema: &str,
-        object_name: &ObjectName,
+        table: &str,
         columns: &[ColumnDef],
         constraints: &[TableConstraint],
-    ) -> DMSRResult<(String, String)> {
-        let (schema, table_name) =
-            Self::parse_schema_and_table_from_sqlparser_object_name(schema, object_name)?;
-
+    ) -> DMSRResult<()> {
         let mut mysql_table_columns: Vec<MySQLTableColumn> = vec![];
 
         for c in columns {
@@ -456,31 +469,26 @@ impl MySQLDecoder {
             }
         }
 
-        let full_table_name = format!("{}.{}", &schema, &table_name);
-
-        let (schema_cloned, table_name_cloned) = (schema.clone(), table_name.clone());
+        let full_table_name = format!("{}.{}", schema, table);
 
         let mysql_table = MySQLTable {
-            schema_name: schema,
-            table_name,
+            schema_name: schema.to_string(),
+            table_name: table.to_string(),
             columns: mysql_table_columns,
         };
 
         self.table_metadata_map.insert(full_table_name, mysql_table);
 
-        Ok((schema_cloned, table_name_cloned))
+        Ok(())
     }
 
     fn parse_alter_table_statement(
         &mut self,
         schema: &str,
-        object_name: &ObjectName,
+        table: &str,
         operation: &AlterTableOperation,
     ) -> DMSRResult<()> {
-        let (schema, table_name) =
-            Self::parse_schema_and_table_from_sqlparser_object_name(schema, object_name)?;
-
-        let full_table_name = format!("{}.{}", schema, table_name);
+        let full_table_name = format!("{}.{}", schema, table);
 
         match operation {
             AlterTableOperation::AddColumn { column_def, .. } => {
@@ -519,6 +527,27 @@ impl MySQLDecoder {
         };
 
         Ok(())
+    }
+
+    fn parse_drop_statement(
+        &mut self,
+        schema: &str,
+        object_type: &ObjectType,
+        names: &[ObjectName],
+    ) -> DMSRResult<Vec<(String, String)>> {
+        if object_type != &ObjectType::Table {
+            return Ok(vec![]);
+        }
+
+        let mut dropped_tables = vec![];
+        for n in names {
+            let (schema, name) = Self::parse_schema_table_from_sqlparser(schema, n)?;
+            let full_table_name = format!("{}.{}", schema, name);
+            self.table_metadata_map.remove(&full_table_name);
+            dropped_tables.push((schema, name));
+        }
+
+        Ok(dropped_tables)
     }
 
     fn parse_add_column_statement(
@@ -632,7 +661,7 @@ impl MySQLDecoder {
         new_table_name: &ObjectName,
     ) -> DMSRResult<()> {
         let (schema, new_table_name) =
-            Self::parse_schema_and_table_from_sqlparser_object_name(schema, new_table_name)?;
+            Self::parse_schema_table_from_sqlparser(schema, new_table_name)?;
 
         let new_full_table_name = format!("{}.{}", schema, new_table_name);
         //
@@ -643,18 +672,18 @@ impl MySQLDecoder {
         Ok(())
     }
 
-    fn parse_schema_and_table_from_sqlparser_object_name(
-        schema: &str,
+    fn parse_schema_table_from_sqlparser(
+        event_schema: &str,
         object_name: &ObjectName,
     ) -> DMSRResult<(String, String)> {
-        let mut table_name = object_name.to_string();
-        let split = table_name.split('.').collect::<Vec<&str>>();
-        let mut schema = schema.to_string();
-        if split.len() == 2 {
-            schema = split[0].to_string();
-            table_name = split[1].to_string();
+        let ident: &Vec<Ident> = &object_name.0;
+        match ident.len() {
+            1 => Ok((event_schema.to_string(), ident[0].to_string())),
+            2 => Ok((ident[0].to_string(), ident[1].to_string())),
+            _ => Err(DMSRError::MySQLSourceConnectorError(
+                format!("Invalid table name: {:?}", object_name).into(),
+            )),
         }
-        Ok((schema, table_name))
     }
 
     fn table_meta_as_mut(&mut self, full_table_name: &str) -> DMSRResult<&mut MySQLTable> {
@@ -681,7 +710,7 @@ impl MySQLDecoder {
             ))
     }
 
-    fn parse_schema_and_table_from_table_map_event(
+    fn parse_schema_table_from_table_map_event(
         event: &TableMapEvent,
     ) -> DMSRResult<(String, String)> {
         let mut schema = event.database_name().to_string();
