@@ -11,7 +11,7 @@ pub type KafkaMessageStream = Pin<Box<dyn Stream<Item = DMSRResult<KafkaMessage>
 pub trait SourceConnector {
     type Config;
 
-    async fn new(connector_name: String, config: &Self::Config) -> DMSRResult<Box<Self>>
+    async fn new(connector_name: &str, config: &Self::Config) -> DMSRResult<Box<Self>>
     where
         Self: Sized;
 

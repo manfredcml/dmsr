@@ -17,10 +17,10 @@ pub struct MySQLSourceConnector {
 impl SourceConnector for MySQLSourceConnector {
     type Config = MySQLSourceConfig;
 
-    async fn new(connector_name: String, config: &MySQLSourceConfig) -> DMSRResult<Box<Self>> {
+    async fn new(connector_name: &str, config: &MySQLSourceConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(MySQLSourceConnector {
-            config: config.clone(),
-            connector_name,
+            config: config.to_owned(),
+            connector_name: connector_name.to_string(),
         }))
     }
 
