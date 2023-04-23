@@ -17,14 +17,14 @@ pub struct MySQLSourceConnector {
 impl SourceConnector for MySQLSourceConnector {
     type Config = MySQLSourceConfig;
 
-    async fn new(connector_name: &str, config: &MySQLSourceConfig) -> DMSRResult<Box<Self>> {
+    async fn new(connector_name: String, config: MySQLSourceConfig) -> DMSRResult<Box<Self>> {
         Ok(Box::new(MySQLSourceConnector {
-            config: config.to_owned(),
-            connector_name: connector_name.to_string(),
+            config,
+            connector_name,
         }))
     }
 
-    async fn cdc_events_to_stream(&mut self) -> DMSRResult<KafkaMessageStream> {
+    async fn make_kafka_message_stream(&mut self) -> DMSRResult<KafkaMessageStream> {
         let conn_str = format!(
             "mysql://{}:{}@{}:{}/{}",
             self.config.user,
@@ -52,7 +52,11 @@ impl SourceConnector for MySQLSourceConnector {
         Ok(stream)
     }
 
-    async fn to_kafka(&self, kafka: &Kafka, stream: &mut KafkaMessageStream) -> DMSRResult<()> {
+    async fn send_to_kafka(
+        &self,
+        kafka: &Kafka,
+        stream: &mut KafkaMessageStream,
+    ) -> DMSRResult<()> {
         while let Some(message) = stream.next().await {
             let message = message?;
             debug!("Sending message to kafka: {:?}", message);

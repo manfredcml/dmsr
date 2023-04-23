@@ -11,11 +11,11 @@ pub type KafkaMessageStream = Pin<Box<dyn Stream<Item = DMSRResult<KafkaMessage>
 pub trait SourceConnector {
     type Config;
 
-    async fn new(connector_name: &str, config: &Self::Config) -> DMSRResult<Box<Self>>
+    async fn new(connector_name: String, config: Self::Config) -> DMSRResult<Box<Self>>
     where
         Self: Sized;
 
-    async fn cdc_events_to_stream(&mut self) -> DMSRResult<KafkaMessageStream>;
+    async fn make_kafka_message_stream(&mut self) -> DMSRResult<KafkaMessageStream>;
 
-    async fn to_kafka(&self, kafka: &Kafka, stream: &mut KafkaMessageStream) -> DMSRResult<()>;
+    async fn send_to_kafka(&self, kafka: &Kafka, stream: &mut KafkaMessageStream) -> DMSRResult<()>;
 }

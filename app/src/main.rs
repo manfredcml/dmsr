@@ -144,11 +144,11 @@ where
         let kafka = Kafka::new(&kafka_config).await?;
 
         info!("Connecting to data source...");
-        let mut connector = ConnectorType::new(connector_name, &config).await?;
+        let mut connector = ConnectorType::new(connector_name_clone, config).await?;
 
         info!("Preparing stream...");
-        let mut stream = connector.cdc_events_to_stream().await?;
-        connector.to_kafka(&kafka, &mut stream).await?;
+        let mut stream = connector.make_kafka_message_stream().await?;
+        connector.send_to_kafka(&kafka, &mut stream).await?;
 
         info!("Stream stopped");
 
@@ -159,7 +159,7 @@ where
         .lock()
         .map_err(|_| DMSRError::LockError("active_connectors".into()))?;
 
-    active_connectors.insert(connector_name_clone, handle);
+    active_connectors.insert(connector_name, handle);
 
     Ok(())
 }
