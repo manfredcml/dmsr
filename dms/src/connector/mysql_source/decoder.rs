@@ -35,7 +35,7 @@ enum RowsEvent<'a> {
 pub struct MySQLDecoder {
     table_metadata_map: HashMap<String, MySQLTable>,
     last_table_map_event: Option<TableMapEvent<'static>>,
-    binlog_file_name: String,
+    binlog_file_name: Option<String>,
     connector_name: String,
     connector_config: MySQLSourceConfig,
 }
@@ -45,7 +45,7 @@ impl MySQLDecoder {
         MySQLDecoder {
             table_metadata_map: HashMap::new(),
             last_table_map_event: None,
-            binlog_file_name: String::default(),
+            binlog_file_name: None,
             connector_name,
             connector_config,
         }
@@ -66,13 +66,15 @@ impl MySQLDecoder {
             }
             EventType::TABLE_MAP_EVENT => {
                 let event = event.read_event::<TableMapEvent>()?;
-                if let Err(e) = self.parse_table_map_event(event.into_owned()) {
+                let result = self.parse_table_map_event(event.into_owned());
+                if let Err(e) = result {
                     error!("Error parsing table map event: {:?}", e);
                 }
             }
             EventType::ROTATE_EVENT => {
                 let event = &event.read_event::<RotateEvent>()?;
-                if let Err(e) = self.parse_rotate_event(event) {
+                let result = self.parse_rotate_event(event);
+                if let Err(e) = result {
                     error!("Error parsing rotate event: {:?}", e);
                 }
             }
@@ -293,7 +295,7 @@ impl MySQLDecoder {
                 &table_metadata.schema_name,
                 &table_metadata.table_name,
                 self.connector_config.server_id,
-                &self.binlog_file_name,
+                self.binlog_file_name()?,
                 log_pos,
             );
 
@@ -307,7 +309,7 @@ impl MySQLDecoder {
     }
 
     fn parse_rotate_event(&mut self, event: &RotateEvent) -> DMSRResult<()> {
-        self.binlog_file_name = event.name().to_string();
+        self.binlog_file_name = Some(event.name().to_string());
         Ok(())
     }
 
@@ -371,6 +373,11 @@ impl MySQLDecoder {
 
                 Ok(msg)
             }
+            Statement::Truncate { table_name, .. } => {
+                let (schema, table) = Self::parse_schema_table_from_sqlparser(&schema, table_name)?;
+                let msg = self.parse_truncate_statement(&schema, &table, ts, log_pos)?;
+                Ok(vec![msg])
+            }
             _ => Err(DMSRError::MySQLSourceConnectorError(
                 format!("Query not supported by parser: {}", query).into(),
             )),
@@ -393,13 +400,13 @@ impl MySQLDecoder {
             schema,
             table,
             self.connector_config.server_id,
-            &self.binlog_file_name,
+            self.binlog_file_name()?,
             log_pos,
         );
 
         let schema = JSONSchema::new_ddl(
             MySQLSourceMetadata::get_schema(),
-            &serde_json::to_string(&ConnectorKind::MySQLSource)?,
+            &ConnectorKind::MySQLSource.to_string(),
         );
 
         let payload: JSONDDLPayload<MySQLSourceMetadata> = JSONDDLPayload::new(ddl, ts, metadata);
@@ -550,6 +557,34 @@ impl MySQLDecoder {
         Ok(dropped_tables)
     }
 
+    fn parse_truncate_statement(
+        &self,
+        schema: &str,
+        table: &str,
+        ts: u64,
+        log_pos: u64,
+    ) -> DMSRResult<KafkaMessage> {
+        let full_table_name = format!("{}.{}", schema, table);
+        let table_meta = self.table_meta_as_ref(&full_table_name)?;
+        let msg_schema = table_meta.as_json_message_schema(&full_table_name)?;
+        let msg_metadata = MySQLSourceMetadata::new(
+            &self.connector_name,
+            &self.connector_config.db,
+            schema,
+            table,
+            self.connector_config.server_id,
+            self.binlog_file_name()?,
+            log_pos,
+        );
+        let msg_payload: JSONPayload<MySQLSourceMetadata> =
+            JSONPayload::new(None, None, Operation::Truncate, ts, msg_metadata);
+
+        let msg = JSONMessage::new(msg_schema, msg_payload);
+        let topic = format!("{}-{}", self.connector_name, full_table_name);
+        let msg = msg.to_kafka_message(topic, None)?;
+        Ok(msg)
+    }
+
     fn parse_add_column_statement(
         &mut self,
         full_table_name: &str,
@@ -686,6 +721,21 @@ impl MySQLDecoder {
         }
     }
 
+    fn parse_schema_table_from_table_map_event(
+        event: &TableMapEvent,
+    ) -> DMSRResult<(String, String)> {
+        let mut schema = event.database_name().to_string();
+        let mut table_name = event.table_name().to_string();
+
+        let split = table_name.split('.').collect::<Vec<&str>>();
+        if split.len() == 2 {
+            schema = split[0].to_string();
+            table_name = split[1].to_string();
+        }
+
+        Ok((schema, table_name))
+    }
+
     fn table_meta_as_mut(&mut self, full_table_name: &str) -> DMSRResult<&mut MySQLTable> {
         self.table_metadata_map.get_mut(full_table_name).ok_or(
             DMSRError::MySQLSourceConnectorError(
@@ -710,18 +760,13 @@ impl MySQLDecoder {
             ))
     }
 
-    fn parse_schema_table_from_table_map_event(
-        event: &TableMapEvent,
-    ) -> DMSRResult<(String, String)> {
-        let mut schema = event.database_name().to_string();
-        let mut table_name = event.table_name().to_string();
-
-        let split = table_name.split('.').collect::<Vec<&str>>();
-        if split.len() == 2 {
-            schema = split[0].to_string();
-            table_name = split[1].to_string();
-        }
-
-        Ok((schema, table_name))
+    fn binlog_file_name(&self) -> DMSRResult<&str> {
+        let binlog_file_name =
+            self.binlog_file_name
+                .as_ref()
+                .ok_or(DMSRError::MySQLSourceConnectorError(
+                    "No binlog file name found".into(),
+                ))?;
+        Ok(binlog_file_name)
     }
 }

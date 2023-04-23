@@ -74,7 +74,7 @@ async fn subscribe_to_config_topic(
     kafka: Kafka,
     active_connectors: MutexActiveConnectors,
 ) -> DMSRResult<()> {
-    let config_topic = kafka.config.config_topic.as_str();
+    let config_topic = &kafka.config.config_topic;
     kafka.consumer.subscribe(&[config_topic])?;
 
     while let Ok(msg) = kafka.consumer.recv().await {

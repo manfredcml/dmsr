@@ -47,6 +47,6 @@ impl MySQLSourceMetadata {
             JSONSchemaField::new(JSONDataType::String, false, "file", None),
             JSONSchemaField::new(JSONDataType::Int64, false, "pos", None),
         ];
-        JSONSchemaField::new(JSONDataType::Struct, false, "source", Some(fields))
+        JSONSchemaField::new(JSONDataType::Struct, false, "metadata", Some(fields))
     }
 }

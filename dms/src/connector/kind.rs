@@ -26,3 +26,13 @@ impl FromStr for ConnectorKind {
         }
     }
 }
+
+impl ToString for ConnectorKind {
+    fn to_string(&self) -> String {
+        match self {
+            ConnectorKind::PostgresSink => "postgres_sink".to_string(),
+            ConnectorKind::PostgresSource => "postgres_source".to_string(),
+            ConnectorKind::MySQLSource => "mysql_source".to_string(),
+        }
+    }
+}
