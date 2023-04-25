@@ -146,9 +146,12 @@ where
         info!("Connecting to data source...");
         let mut connector = ConnectorType::new(connector_name_clone, config).await?;
 
+        info!("Taking snapshot...");
+        connector.snapshot(&kafka).await?;
+
         info!("Preparing stream...");
-        let mut stream = connector.make_kafka_message_stream().await?;
-        connector.send_to_kafka(&kafka, &mut stream).await?;
+        // let mut stream = connector.make_message_stream().await?;
+        // connector.send_to_kafka(&kafka, &mut stream).await?;
 
         info!("Stream stopped");
 

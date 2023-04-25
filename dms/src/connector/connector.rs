@@ -15,7 +15,10 @@ pub trait SourceConnector {
     where
         Self: Sized;
 
-    async fn make_kafka_message_stream(&mut self) -> DMSRResult<KafkaMessageStream>;
+    async fn snapshot(&self, kafka: &Kafka) -> DMSRResult<()>;
 
-    async fn send_to_kafka(&self, kafka: &Kafka, stream: &mut KafkaMessageStream) -> DMSRResult<()>;
+    async fn make_message_stream(&mut self) -> DMSRResult<KafkaMessageStream>;
+
+    async fn send_to_kafka(&self, kafka: &Kafka, stream: &mut KafkaMessageStream)
+        -> DMSRResult<()>;
 }
