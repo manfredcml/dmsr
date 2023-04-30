@@ -2,7 +2,7 @@ use crate::connector::kind::ConnectorKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct PostgresSource {
+pub struct PostgresSourceMetadata {
     pub connector_type: ConnectorKind,
     pub connector_name: String,
     pub lsn: u64,

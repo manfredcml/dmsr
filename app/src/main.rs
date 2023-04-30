@@ -150,8 +150,8 @@ where
         connector.snapshot(&kafka).await?;
 
         info!("Preparing stream...");
-        // let mut stream = connector.make_message_stream().await?;
-        // connector.send_to_kafka(&kafka, &mut stream).await?;
+        let mut stream = connector.stream_messages().await?;
+        connector.publish_messages(&kafka, &mut stream).await?;
 
         info!("Stream stopped");
 

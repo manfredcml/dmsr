@@ -1,3 +1,4 @@
+use crate::kafka::payload::base::PayloadEncoding;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]

@@ -1,8 +1,10 @@
 use crate::connector::connector::{KafkaMessageStream, SourceConnector};
 use crate::connector::mysql_source::config::MySQLSourceConfig;
-use crate::connector::mysql_source::decoder::MySQLDecoder;
-use crate::error::error::{DMSRError, DMSRResult};
+use crate::connector::mysql_source::decoder::EventDecoder;
+use crate::connector::mysql_source::metadata::MySQLSourceMetadata;
+use crate::error::error::DMSRResult;
 use crate::kafka::kafka::Kafka;
+use crate::kafka::payload::base::{Payload, PayloadEncoding};
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
@@ -19,6 +21,7 @@ pub struct MySQLSourceConnector {
 #[async_trait]
 impl SourceConnector for MySQLSourceConnector {
     type Config = MySQLSourceConfig;
+    type Metadata = MySQLSourceMetadata;
 
     async fn new(connector_name: String, config: MySQLSourceConfig) -> DMSRResult<Box<Self>> {
         let conn_str = format!(
@@ -80,21 +83,30 @@ impl SourceConnector for MySQLSourceConnector {
         Ok(())
     }
 
-    async fn make_message_stream(&mut self) -> DMSRResult<KafkaMessageStream> {
+    async fn stream_messages(&mut self) -> DMSRResult<KafkaMessageStream> {
         let db_conn_binlog = self.pool.get_conn().await?;
 
         let binlog_request = BinlogRequest::new(self.config.server_id);
         let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
-        let mut decoder = MySQLDecoder::new(self.connector_name.clone(), self.config.clone());
+        let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
 
         debug!("Creating Kafka message stream...");
         let stream: KafkaMessageStream = Box::pin(async_stream::stream! {
             while let Some(event) = cdc_stream.next().await {
                 debug!("Received event from MySQL: {:?}", event);
                 let event = event?;
-                let kafka_messages = decoder.parse(event)?;
-                for msg in kafka_messages {
-                    yield Ok(msg);
+                let payloads = decoder.parse(event)?;
+                for p in payloads {
+                    match p {
+                        Payload::RowData(data) => {
+                            let msg = data.into_kafka_message(PayloadEncoding::Default)?;
+                            yield Ok(msg);
+                        }
+                        Payload::DDL(data) => {
+                            let msg = data.into_kafka_message(PayloadEncoding::Default)?;
+                            yield Ok(msg);
+                        }
+                    }
                 }
             }
         });
@@ -102,7 +114,7 @@ impl SourceConnector for MySQLSourceConnector {
         Ok(stream)
     }
 
-    async fn send_to_kafka(
+    async fn publish_messages(
         &self,
         kafka: &Kafka,
         stream: &mut KafkaMessageStream,

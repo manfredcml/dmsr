@@ -1,5 +1,5 @@
 use crate::connector::kind::ConnectorKind;
-use crate::kafka::json::{JSONDataType, JSONSchemaField};
+use crate::kafka::metadata::ConnectorMetadata;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
@@ -35,18 +35,18 @@ impl MySQLSourceMetadata {
             pos,
         }
     }
+}
 
-    pub fn get_schema() -> JSONSchemaField {
-        let fields = vec![
-            JSONSchemaField::new(JSONDataType::String, false, "connector_type", None),
-            JSONSchemaField::new(JSONDataType::String, false, "connector_name", None),
-            JSONSchemaField::new(JSONDataType::String, false, "db", None),
-            JSONSchemaField::new(JSONDataType::String, true, "schema", None),
-            JSONSchemaField::new(JSONDataType::String, false, "table", None),
-            JSONSchemaField::new(JSONDataType::Int64, false, "server_id", None),
-            JSONSchemaField::new(JSONDataType::String, false, "file", None),
-            JSONSchemaField::new(JSONDataType::Int64, false, "pos", None),
-        ];
-        JSONSchemaField::new(JSONDataType::Struct, false, "metadata", Some(fields))
+impl ConnectorMetadata for MySQLSourceMetadata {
+    fn get_kafka_topic(&self) -> String {
+        format!("{}.{}.{}", self.connector_name, self.schema, self.table)
+    }
+
+    fn get_schema(&self) -> &str {
+        &self.schema
+    }
+
+    fn get_table(&self) -> &str {
+        &self.table
     }
 }
