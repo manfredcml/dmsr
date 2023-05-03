@@ -41,10 +41,9 @@ impl Kafka {
         })
     }
 
-    pub async fn create_config_topic(&self) -> DMSRResult<()> {
-        let topic_name = &self.config.config_topic;
+    pub async fn create_topic(&self, topic_name: &str, clean_up_policy: &str) -> DMSRResult<()> {
         let topic = rdkafka::admin::NewTopic::new(topic_name, 1, TopicReplication::Fixed(1))
-            .set("cleanup.policy", "compact");
+            .set("cleanup.policy", clean_up_policy);
         let topics = [topic];
         let options = AdminOptions::new();
         let result = self.admin.create_topics(&topics, &options).await?;
@@ -52,18 +51,18 @@ impl Kafka {
         Ok(())
     }
 
-    pub async fn ingest(&self, message: KafkaMessage) -> DMSRResult<()> {
+    pub async fn produce(&self, message: KafkaMessage) -> DMSRResult<()> {
         let topic = &message.topic;
         let value = &message.value;
         let key = &message.key.unwrap_or_default();
-        let mut record = rdkafka::producer::FutureRecord::to(&topic).payload(value);
+        let mut record = rdkafka::producer::FutureRecord::to(topic).payload(value);
 
         if !key.is_empty() {
             record = record.key(key);
         }
 
         let status = self.producer.send(record, Duration::from_secs(0)).await;
-        return match status {
+        match status {
             Ok(delivery_status) => {
                 debug!("Delivery status: {:?}\n", delivery_status);
                 Ok(())
@@ -72,6 +71,6 @@ impl Kafka {
                 debug!("Send failed: {:?}: {:?}\n", err, message);
                 Err(err.into())
             }
-        };
+        }
     }
 }

@@ -4,4 +4,6 @@ use serde::{Deserialize, Serialize};
 pub struct KafkaConfig {
     pub bootstrap_servers: String,
     pub config_topic: String,
+    pub offset_topic: String,
+    pub status_topic: String,
 }

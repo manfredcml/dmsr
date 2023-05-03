@@ -36,9 +36,8 @@ async fn main() -> DMSRResult<()> {
     let args = Args::parse();
     let kafka_config = args.to_kafka_config();
 
-    // Create config storage topic
-    let mut kafka = Kafka::new(&kafka_config).await?;
-    kafka.create_config_topic().await?;
+    let kafka = Kafka::new(&kafka_config).await?;
+    create_required_topics(&kafka, &kafka_config).await?;
 
     let active_connectors: MutexActiveConnectors = Arc::new(Mutex::new(HashMap::new()));
     let active_connectors_clone = Arc::clone(&active_connectors);
@@ -67,6 +66,13 @@ async fn main() -> DMSRResult<()> {
     .run()
     .await?;
 
+    Ok(())
+}
+
+async fn create_required_topics(kafka: &Kafka, config: &KafkaConfig) -> DMSRResult<()> {
+    kafka.create_topic(&config.config_topic, "compact").await?;
+    kafka.create_topic(&config.offset_topic, "compact").await?;
+    kafka.create_topic(&config.status_topic, "compact").await?;
     Ok(())
 }
 
@@ -150,8 +156,8 @@ where
         connector.snapshot(&kafka).await?;
 
         info!("Preparing stream...");
-        let mut stream = connector.stream_messages().await?;
-        connector.publish_messages(&kafka, &mut stream).await?;
+        // let mut stream = connector.stream_messages().await?;
+        // connector.publish_messages(&kafka, &mut stream).await?;
 
         info!("Stream stopped");
 
