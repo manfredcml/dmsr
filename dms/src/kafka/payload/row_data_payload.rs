@@ -53,7 +53,7 @@ where
         let value = serde_json::to_string(&self)?;
         message.set_value(value);
 
-        let topic = self.metadata.get_kafka_topic();
+        let topic = self.metadata.kafka_topic();
         message.set_topic(topic);
 
         Ok(message)

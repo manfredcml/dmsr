@@ -37,8 +37,8 @@ where
         let mut message = KafkaMessage::new();
 
         let mut key = json!({});
-        key["schema"] = self.metadata.get_schema().to_string().into();
-        key["table"] = self.metadata.get_table().to_string().into();
+        key["schema"] = self.metadata.schema().to_string().into();
+        key["table"] = self.metadata.table().to_string().into();
         let key = serde_json::to_string(&key)?;
 
         message.set_key(key);
@@ -46,8 +46,8 @@ where
         let value = serde_json::to_string(&self)?;
         message.set_value(value);
 
-        let topic = self.metadata.get_kafka_topic();
-        message.set_topic(topic);
+        let topic = self.metadata.connector_name();
+        message.set_topic(topic.to_string());
 
         Ok(message)
     }

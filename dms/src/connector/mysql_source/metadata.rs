@@ -38,15 +38,19 @@ impl MySQLSourceMetadata {
 }
 
 impl ConnectorMetadata for MySQLSourceMetadata {
-    fn get_kafka_topic(&self) -> String {
+    fn kafka_topic(&self) -> String {
         format!("{}.{}.{}", self.connector_name, self.schema, self.table)
     }
 
-    fn get_schema(&self) -> &str {
+    fn schema(&self) -> &str {
         &self.schema
     }
 
-    fn get_table(&self) -> &str {
+    fn table(&self) -> &str {
         &self.table
+    }
+
+    fn connector_name(&self) -> &str {
+        &self.connector_name
     }
 }

@@ -12,7 +12,6 @@ use futures::StreamExt;
 use log::debug;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogRequest, Conn, Pool, Row};
-use rdkafka::consumer::Consumer;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -41,31 +40,26 @@ impl SourceConnector for MySQLSourceConnector {
     }
 
     async fn snapshot(&self, kafka: &Kafka) -> DMSRResult<()> {
-        // Global read lock
         let mut conn = self.pool.get_conn().await?;
 
         self.lock_tables(&mut conn).await?;
         let (binlog_name, binlog_pos) = self.read_binlog(&mut conn).await?;
 
-        let schemas = self.read_schemas(&mut conn).await?;
+        // let schemas = self.read_schemas(&mut conn).await?;
         let tables = self.read_tables(&mut conn).await?;
         let columns = self.read_columns(&mut conn).await?;
 
-        // Get DDLs
-        let ddl_payloads = self
-            .read_ddls(&mut conn, &binlog_name, &binlog_pos, &tables)
+        self.read_ddls(kafka, &mut conn, &binlog_name, &binlog_pos, &tables)
             .await?;
 
-        // Reading data
-        let r = self
-            .read_table_data(&mut conn, &columns, &binlog_name, &binlog_pos)
-            .await;
-        println!("r: {:?}", r);
+        conn.query_drop("UNLOCK TABLES").await?;
+
+        self.read_table_data(kafka, &mut conn, &columns, &binlog_name, &binlog_pos)
+            .await?;
 
         conn.query_drop("COMMIT").await?;
         conn.disconnect().await?;
 
-        // kafka.consumer.subscribe()
         Ok(())
     }
 
@@ -184,13 +178,12 @@ impl MySQLSourceConnector {
 
     async fn read_ddls(
         &self,
+        kafka: &Kafka,
         conn: &mut Conn,
         binlog_name: &str,
         binlog_pos: &u64,
         tables: &[(String, String)],
-    ) -> DMSRResult<Vec<DDLPayload<MySQLSourceMetadata>>> {
-        let mut ddl_payloads: Vec<DDLPayload<MySQLSourceMetadata>> = vec![];
-
+    ) -> DMSRResult<()> {
         for (schema, table) in tables.iter() {
             let metadata = MySQLSourceMetadata::new(
                 &self.connector_name,
@@ -213,17 +206,16 @@ impl MySQLSourceConnector {
                 .ok_or(DMSRError::MySQLSourceConnectorError("No DDL found".into()))?;
 
             let payload = DDLPayload::new(ddl.1, ts_now, metadata);
-
-            ddl_payloads.push(payload)
+            let kafka_message = payload.into_kafka_message(PayloadEncoding::Default)?;
+            kafka.produce(kafka_message).await?;
         }
 
-        conn.query_drop("UNLOCK TABLES").await?;
-
-        Ok(ddl_payloads)
+        Ok(())
     }
 
     async fn read_table_data(
         &self,
+        kafka: &Kafka,
         conn: &mut Conn,
         columns: &HashMap<(String, String), Vec<String>>,
         binlog_name: &str,
@@ -264,7 +256,10 @@ impl MySQLSourceConnector {
                     metadata,
                 );
 
-                // TODO: Send to Kafka
+                let kafka_message =
+                    row_data_payload.into_kafka_message(PayloadEncoding::Default)?;
+
+                kafka.produce(kafka_message).await?;
             }
         }
 
