@@ -1,18 +1,16 @@
-use crate::connector::mysql_source::source_metadata::MySQLSourceMetadata;
 use crate::error::error::DMSRResult;
 use crate::kafka::config::KafkaConfig;
 use crate::kafka::message::KafkaMessage;
-use crate::kafka::metadata::ConnectorMetadata;
 use crate::kafka::payload::base::PayloadEncoding;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub enum DDLPayload {
-    MySQL(MySQLDDLPayload),
+pub enum OffsetPayload {
+    MySQL(MySQLOffsetPayload),
 }
 
-impl DDLPayload {
+impl OffsetPayload {
     pub fn to_kafka_message(
         &self,
         kafka_config: &KafkaConfig,
@@ -25,21 +23,20 @@ impl DDLPayload {
 
     fn to_kafka_message_default(&self, kafka_config: &KafkaConfig) -> DMSRResult<KafkaMessage> {
         match self {
-            DDLPayload::MySQL(payload) => {
+            OffsetPayload::MySQL(payload) => {
                 let mut message = KafkaMessage::new();
 
                 let mut key = json!({});
-                key["schema"] = payload.metadata.schema().to_string().into();
-                key["table"] = payload.metadata.table().to_string().into();
+                key["connector_name"] = payload.connector_name.clone().into();
                 let key = serde_json::to_string(&key)?;
 
                 message.set_key(key);
 
-                let value = serde_json::to_string(&self)?;
+                let value = serde_json::to_string(&payload)?;
                 message.set_value(value);
 
-                let topic = payload.metadata.connector_name();
-                message.set_topic(topic.to_string());
+                let topic = kafka_config.offset_topic.clone();
+                message.set_topic(topic);
 
                 Ok(message)
             }
@@ -48,18 +45,22 @@ impl DDLPayload {
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct MySQLDDLPayload {
-    ddl: String,
-    ts_ms: u64,
-    metadata: MySQLSourceMetadata,
+pub struct MySQLOffsetPayload {
+    connector_name: String,
+    db: String,
+    server_id: u32,
+    file: String,
+    pos: u64,
 }
 
-impl MySQLDDLPayload {
-    pub fn new(ddl: &str, ts_ms: u64, metadata: MySQLSourceMetadata) -> Self {
-        MySQLDDLPayload {
-            ddl: ddl.to_string(),
-            ts_ms,
-            metadata,
+impl MySQLOffsetPayload {
+    pub fn new(connector_name: &str, db: &str, server_id: u32, file: &str, pos: u64) -> Self {
+        MySQLOffsetPayload {
+            connector_name: connector_name.to_string(),
+            db: db.to_string(),
+            server_id,
+            file: file.to_string(),
+            pos,
         }
     }
 }

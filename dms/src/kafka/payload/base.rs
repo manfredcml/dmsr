@@ -19,12 +19,9 @@ pub enum Operation {
     Snapshot,
 }
 
-pub enum Payload<M>
-where
-    M: ConnectorMetadata,
-{
-    RowData(RowDataPayload<M>),
-    DDL(DDLPayload<M>),
+pub enum Payload {
+    RowData(RowDataPayload),
+    DDL(DDLPayload),
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]

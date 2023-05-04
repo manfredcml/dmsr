@@ -1,12 +1,14 @@
 use crate::connector::connector::{KafkaMessageStream, SourceConnector};
 use crate::connector::mysql_source::config::MySQLSourceConfig;
 use crate::connector::mysql_source::decoder::EventDecoder;
-use crate::connector::mysql_source::metadata::MySQLSourceMetadata;
+use crate::connector::mysql_source::source_metadata::MySQLSourceMetadata;
 use crate::error::error::{DMSRError, DMSRResult};
 use crate::kafka::kafka::Kafka;
 use crate::kafka::payload::base::{Operation, Payload, PayloadEncoding};
-use crate::kafka::payload::ddl_payload::DDLPayload;
-use crate::kafka::payload::row_data_payload::RowDataPayload;
+use crate::kafka::payload::ddl_payload::DDLPayload::MySQL;
+use crate::kafka::payload::ddl_payload::{DDLPayload, MySQLDDLPayload};
+use crate::kafka::payload::offset_payload::{MySQLOffsetPayload, OffsetPayload};
+use crate::kafka::payload::row_data_payload::{MySQLRowDataPayload, RowDataPayload};
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
@@ -63,7 +65,7 @@ impl SourceConnector for MySQLSourceConnector {
         Ok(())
     }
 
-    async fn stream_messages(&mut self) -> DMSRResult<KafkaMessageStream> {
+    async fn stream_messages(&mut self, kafka: &Kafka) -> DMSRResult<KafkaMessageStream> {
         let db_conn_binlog = self.pool.get_conn().await?;
 
         let binlog_request = BinlogRequest::new(self.config.server_id);
@@ -71,6 +73,7 @@ impl SourceConnector for MySQLSourceConnector {
         let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
 
         debug!("Creating Kafka message stream...");
+        let kafka_config = kafka.config.clone();
         let stream: KafkaMessageStream = Box::pin(async_stream::stream! {
             while let Some(event) = cdc_stream.next().await {
                 debug!("Received event from MySQL: {:?}", event);
@@ -79,11 +82,11 @@ impl SourceConnector for MySQLSourceConnector {
                 for p in payloads {
                     match p {
                         Payload::RowData(data) => {
-                            let msg = data.into_kafka_message(PayloadEncoding::Default)?;
+                            let msg = data.to_kafka_message(&kafka_config, PayloadEncoding::Default)?;
                             yield Ok(msg);
                         }
                         Payload::DDL(data) => {
-                            let msg = data.into_kafka_message(PayloadEncoding::Default)?;
+                            let msg = data.to_kafka_message(&kafka_config, PayloadEncoding::Default)?;
                             yield Ok(msg);
                         }
                     }
@@ -205,8 +208,10 @@ impl MySQLSourceConnector {
                 .pop()
                 .ok_or(DMSRError::MySQLSourceConnectorError("No DDL found".into()))?;
 
-            let payload = DDLPayload::new(ddl.1, ts_now, metadata);
-            let kafka_message = payload.into_kafka_message(PayloadEncoding::Default)?;
+            let payload = MySQLDDLPayload::new(&ddl.1, ts_now, metadata);
+            let payload = MySQL(payload);
+            let kafka_message =
+                payload.to_kafka_message(&kafka.config, PayloadEncoding::Default)?;
             kafka.produce(kafka_message).await?;
         }
 
@@ -248,7 +253,7 @@ impl MySQLSourceConnector {
 
                 let ts_now = chrono::Utc::now().timestamp_millis() as u64;
 
-                let row_data_payload: RowDataPayload<MySQLSourceMetadata> = RowDataPayload::new(
+                let row_data_payload = MySQLRowDataPayload::new(
                     None,
                     Some(row_data),
                     Operation::Snapshot,
@@ -256,12 +261,37 @@ impl MySQLSourceConnector {
                     metadata,
                 );
 
+                let row_data_payload = RowDataPayload::MySQL(row_data_payload);
+
                 let kafka_message =
-                    row_data_payload.into_kafka_message(PayloadEncoding::Default)?;
+                    row_data_payload.to_kafka_message(&kafka.config, PayloadEncoding::Default)?;
 
                 kafka.produce(kafka_message).await?;
             }
         }
+
+        Ok(())
+    }
+
+    async fn update_offsets(
+        &self,
+        kafka: &Kafka,
+        binlog_name: &str,
+        binlog_pos: &u64,
+    ) -> DMSRResult<()> {
+        let offset_payload = MySQLOffsetPayload::new(
+            &self.connector_name,
+            &self.config.db,
+            self.config.server_id,
+            binlog_name,
+            *binlog_pos,
+        );
+
+        let offset_payload = OffsetPayload::MySQL(offset_payload);
+        let kafka_message =
+            offset_payload.to_kafka_message(&kafka.config, PayloadEncoding::Default)?;
+
+        kafka.produce(kafka_message).await?;
 
         Ok(())
     }
