@@ -4,6 +4,7 @@ use crate::connector::mysql_source::table::{MySQLTable, MySQLTableColumn};
 use crate::error::error::{DMSRError, DMSRResult};
 use crate::kafka::payload::base::{Operation, Payload};
 use crate::kafka::payload::ddl_payload::{DDLPayload, MySQLDDLPayload};
+use crate::kafka::payload::row_data_payload::RowDataPayload::MySQL;
 use crate::kafka::payload::row_data_payload::{MySQLRowDataPayload, RowDataPayload};
 use log::{debug, error};
 use mysql_async::binlog::events::{
@@ -22,7 +23,6 @@ use sqlparser::ast::{
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::HashMap;
-use crate::kafka::payload::row_data_payload::RowDataPayload::MySQL;
 
 enum RowsEvent<'a> {
     Write(WriteRowsEvent<'a>),
@@ -312,16 +312,23 @@ impl EventDecoder {
         log_pos: u64,
     ) -> DMSRResult<Vec<Payload>> {
         debug!("QUERY_EVENT: {:?}\n", event);
-
         let schema = event.schema().to_string();
         let query = event.query().to_string();
+        self.parse_ddl_query(&schema, &query, ts, log_pos)
+    }
+
+    pub fn parse_ddl_query(
+        &mut self,
+        schema: &str,
+        query: &str,
+        ts: u64,
+        log_pos: u64,
+    ) -> DMSRResult<Vec<Payload>> {
         let dialect = MySqlDialect {};
         let ast: Vec<Statement> = Parser::parse_sql(&dialect, &query)?;
-
         let stmt = ast.first().ok_or(DMSRError::MySQLSourceConnectorError(
             format!("Query not supported by parser: {}", query).into(),
         ))?;
-        debug!("SQL statement: {:?}\n", stmt);
 
         let payloads = match stmt {
             Statement::CreateTable {
@@ -391,7 +398,7 @@ impl EventDecoder {
             log_pos,
         );
 
-        let payload= MySQLDDLPayload::new(ddl, ts, metadata);
+        let payload = MySQLDDLPayload::new(ddl, ts, metadata);
         let payload = DDLPayload::MySQL(payload);
 
         Ok(Payload::DDL(payload))

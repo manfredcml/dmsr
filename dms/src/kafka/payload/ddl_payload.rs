@@ -35,7 +35,7 @@ impl DDLPayload {
 
                 message.set_key(key);
 
-                let value = serde_json::to_string(&self)?;
+                let value = serde_json::to_string(&payload)?;
                 message.set_value(value);
 
                 let topic = payload.metadata.connector_name();
@@ -49,9 +49,9 @@ impl DDLPayload {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct MySQLDDLPayload {
-    ddl: String,
-    ts_ms: u64,
-    metadata: MySQLSourceMetadata,
+    pub ddl: String,
+    pub ts_ms: u64,
+    pub metadata: MySQLSourceMetadata,
 }
 
 impl MySQLDDLPayload {

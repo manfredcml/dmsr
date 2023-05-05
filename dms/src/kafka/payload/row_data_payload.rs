@@ -32,7 +32,7 @@ impl RowDataPayload {
                 //     message.set_key(key);
                 // }
 
-                let value = serde_json::to_string(&self)?;
+                let value = serde_json::to_string(&payload)?;
                 message.set_value(value);
 
                 let topic = payload.metadata.kafka_topic();

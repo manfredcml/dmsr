@@ -8,6 +8,7 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, StreamConsumer};
 use rdkafka::error::KafkaResult;
+use rdkafka::message::BorrowedMessage;
 use rdkafka::producer::FutureProducer;
 use rdkafka::Message;
 use std::collections::HashMap;
@@ -80,11 +81,21 @@ impl Kafka {
         }
     }
 
-    pub async fn poll(
+    pub fn get_consumer(&self, topic: &str) -> DMSRResult<BaseConsumer> {
+        let mut config = ClientConfig::new();
+        config.set("group.id", Uuid::new_v4().to_string());
+        config.set("bootstrap.servers", &self.config.bootstrap_servers);
+        config.set("auto.offset.reset", "smallest");
+        let consumer: BaseConsumer = config.create()?;
+        consumer.subscribe(&[topic])?;
+        Ok(consumer)
+    }
+
+    pub async fn poll_with_timeout(
         &self,
         topic: &str,
         timeout: u64,
-    ) -> DMSRResult<HashMap<String, serde_json::Value>> {
+    ) -> DMSRResult<Vec<RawKafkaMessageKeyValue>> {
         let mut config = ClientConfig::new();
         config.set("group.id", Uuid::new_v4().to_string());
         config.set("bootstrap.servers", &self.config.bootstrap_servers);
@@ -93,7 +104,7 @@ impl Kafka {
 
         consumer.subscribe(&[topic])?;
 
-        let mut connectors: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut messages: Vec<RawKafkaMessageKeyValue> = vec![];
         let mut last_received = Instant::now();
         loop {
             let message = consumer.poll(Duration::from_secs(timeout));
@@ -101,14 +112,11 @@ impl Kafka {
                 Some(Ok(message)) => {
                     last_received = Instant::now();
                     let key = message.key().unwrap_or_default();
-                    let key_json = serde_json::from_slice::<serde_json::Value>(key)?;
-                    debug!("key_json: {:?}", key_json);
-                    if let Some(connector_name) = key_json.get("connector_name") {
-                        let connector_name = connector_name.as_str().unwrap_or_default();
-                        let value = message.payload().unwrap_or_default();
-                        let value_json = serde_json::from_slice::<serde_json::Value>(value)?;
-                        connectors.insert(connector_name.to_string(), value_json);
-                    };
+                    let key = std::str::from_utf8(key)?.to_string();
+                    let value = message.payload().unwrap_or_default();
+                    let value = std::str::from_utf8(value)?.to_string();
+                    let raw_message = RawKafkaMessageKeyValue::new(key, value);
+                    messages.push(raw_message);
                 }
                 Some(Err(err)) => {
                     return Err(err.into());
@@ -121,7 +129,17 @@ impl Kafka {
             }
         }
 
-        debug!("poll done");
-        Ok(connectors)
+        Ok(messages)
+    }
+}
+
+pub struct RawKafkaMessageKeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+impl RawKafkaMessageKeyValue {
+    pub fn new(key: String, value: String) -> Self {
+        RawKafkaMessageKeyValue { key, value }
     }
 }

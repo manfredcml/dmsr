@@ -15,7 +15,6 @@ use dms::connector::connector::SourceConnector;
 use dms::connector::kind::ConnectorKind;
 use dms::connector::mysql_source::config::MySQLSourceConfig;
 use dms::connector::mysql_source::connector::MySQLSourceConnector;
-use dms::connector::postgres_sink::config::PostgresSinkConfig;
 // use dms::connector::postgres_sink::connector::PostgresSinkConnector;
 use dms::connector::postgres_source::config::PostgresSourceConfig;
 // use dms::connector::postgres_source::connector::PostgresSourceConnector;
@@ -106,15 +105,6 @@ async fn subscribe_to_config_topic(
                 // )
                 // .await?;
             }
-            ConnectorKind::PostgresSink => {
-                // start_connector::<PostgresSinkConfig, PostgresSinkConnector>(
-                //     &kafka.config,
-                //     connector_name,
-                //     connector_config,
-                //     active_connectors,
-                // )
-                // .await?;
-            }
             ConnectorKind::MySQLSource => {
                 start_connector::<MySQLSourceConfig, MySQLSourceConnector>(
                     &kafka.config,
@@ -156,8 +146,8 @@ where
         connector.snapshot(&kafka).await?;
 
         info!("Preparing stream...");
-        let mut stream = connector.stream_messages(&kafka).await?;
-        connector.publish_messages(&kafka, &mut stream).await?;
+        // let mut stream = connector.stream_messages(&kafka).await?;
+        // connector.publish_messages(&kafka, &mut stream).await?;
 
         info!("Stream stopped");
 

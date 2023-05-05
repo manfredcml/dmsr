@@ -14,7 +14,7 @@ use futures::StreamExt;
 use log::debug;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogRequest, Conn, Pool, Row};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 pub struct MySQLSourceConnector {
@@ -46,7 +46,20 @@ impl SourceConnector for MySQLSourceConnector {
     }
 
     async fn snapshot(&mut self, kafka: &Kafka) -> DMSRResult<()> {
-        let connectors = kafka.poll(&kafka.config.offset_topic, 1).await?;
+        let offset_topic_messages = kafka
+            .poll_with_timeout(&kafka.config.offset_topic, 1)
+            .await?;
+
+        let mut connectors: HashMap<String, Value> = HashMap::new();
+        for message in offset_topic_messages {
+            let key_json: Value = serde_json::from_str(&message.key)?;
+            if let Some(connector_name) = key_json.get("connector_name") {
+                let connector_name = connector_name.as_str().unwrap_or_default();
+                let value_json = serde_json::from_str(&message.value)?;
+                connectors.insert(connector_name.to_string(), value_json);
+            };
+        }
+
         if let Some(binlog_info) = connectors.get(&self.connector_name) {
             let binlog_info = binlog_info.clone();
             let binlog_info: MySQLOffsetPayload = serde_json::from_value(binlog_info)?;
@@ -96,6 +109,30 @@ impl SourceConnector for MySQLSourceConnector {
 
         let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
         let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
+
+        debug!("Reading historical schema changes...");
+        let schema_messages = kafka.poll_with_timeout(&self.connector_name, 1).await?;
+
+        for msg in schema_messages {
+            let key_json = serde_json::from_str::<Value>(&msg.key)?;
+
+            let schema = key_json
+                .get("schema")
+                .ok_or(DMSRError::MySQLSourceConnectorError(
+                    "Schema not found in schema message".into(),
+                ))?
+                .as_str()
+                .unwrap_or_default();
+
+            let value = serde_json::from_str::<MySQLDDLPayload>(&msg.value)?;
+
+            decoder.parse_ddl_query(
+                &schema,
+                &value.ddl,
+                value.ts_ms,
+                value.metadata.pos,
+            )?;
+        }
 
         debug!("Creating Kafka message stream...");
         let kafka_config = kafka.config.clone();
