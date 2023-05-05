@@ -63,4 +63,12 @@ impl MySQLOffsetPayload {
             pos,
         }
     }
+
+    pub fn file(&self) -> &str {
+        &self.file
+    }
+
+    pub fn pos(&self) -> u64 {
+        self.pos
+    }
 }

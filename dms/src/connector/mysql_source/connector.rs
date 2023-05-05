@@ -21,6 +21,8 @@ pub struct MySQLSourceConnector {
     config: MySQLSourceConfig,
     connector_name: String,
     pool: Pool,
+    latest_binlog_pos: Option<u64>,
+    latest_binlog_name: Option<String>,
 }
 
 #[async_trait]
@@ -38,14 +40,18 @@ impl SourceConnector for MySQLSourceConnector {
             config,
             connector_name,
             pool,
+            latest_binlog_pos: None,
+            latest_binlog_name: None,
         }))
     }
 
-    async fn snapshot(&self, kafka: &Kafka) -> DMSRResult<()> {
+    async fn snapshot(&mut self, kafka: &Kafka) -> DMSRResult<()> {
         let connectors = kafka.poll(&kafka.config.offset_topic, 1).await?;
         if let Some(binlog_info) = connectors.get(&self.connector_name) {
             let binlog_info = binlog_info.clone();
             let binlog_info: MySQLOffsetPayload = serde_json::from_value(binlog_info)?;
+            self.latest_binlog_pos = Some(binlog_info.pos());
+            self.latest_binlog_name = Some(binlog_info.file().to_string());
             return Ok(());
         }
 
@@ -77,7 +83,17 @@ impl SourceConnector for MySQLSourceConnector {
 
     async fn stream_messages(&mut self, kafka: &Kafka) -> DMSRResult<KafkaMessageStream> {
         let db_conn_binlog = self.pool.get_conn().await?;
-        let binlog_request = BinlogRequest::new(self.config.server_id);
+        let mut binlog_request = BinlogRequest::new(self.config.server_id);
+
+        if let (Some(binlog_pos), Some(binlog_name)) =
+            (&self.latest_binlog_pos, &self.latest_binlog_name)
+        {
+            let binlog_name = binlog_name.as_bytes();
+            binlog_request = binlog_request
+                .with_filename(binlog_name)
+                .with_pos(*binlog_pos);
+        }
+
         let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
         let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
 
