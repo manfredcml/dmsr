@@ -42,6 +42,13 @@ impl SourceConnector for MySQLSourceConnector {
     }
 
     async fn snapshot(&self, kafka: &Kafka) -> DMSRResult<()> {
+        let connectors = kafka.poll(&kafka.config.offset_topic, 1).await?;
+        if let Some(binlog_info) = connectors.get(&self.connector_name) {
+            let binlog_info = binlog_info.clone();
+            let binlog_info: MySQLOffsetPayload = serde_json::from_value(binlog_info)?;
+            return Ok(());
+        }
+
         let mut conn = self.pool.get_conn().await?;
 
         self.lock_tables(&mut conn).await?;
@@ -62,12 +69,14 @@ impl SourceConnector for MySQLSourceConnector {
         conn.query_drop("COMMIT").await?;
         conn.disconnect().await?;
 
+        self.update_offsets(kafka, &binlog_name, &binlog_pos)
+            .await?;
+
         Ok(())
     }
 
     async fn stream_messages(&mut self, kafka: &Kafka) -> DMSRResult<KafkaMessageStream> {
         let db_conn_binlog = self.pool.get_conn().await?;
-
         let binlog_request = BinlogRequest::new(self.config.server_id);
         let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
         let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
