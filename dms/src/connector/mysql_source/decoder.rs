@@ -752,4 +752,8 @@ impl EventDecoder {
                 ))?;
         Ok(binlog_file_name)
     }
+
+    pub fn set_binlog_file_name(&mut self, binlog_file_name: String) {
+        self.binlog_file_name = Some(binlog_file_name);
+    }
 }

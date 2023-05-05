@@ -95,12 +95,15 @@ impl SourceConnector for MySQLSourceConnector {
     }
 
     async fn stream_messages(&mut self, kafka: &Kafka) -> DMSRResult<KafkaMessageStream> {
+        let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
+
         let db_conn_binlog = self.pool.get_conn().await?;
         let mut binlog_request = BinlogRequest::new(self.config.server_id);
 
         if let (Some(binlog_pos), Some(binlog_name)) =
             (&self.latest_binlog_pos, &self.latest_binlog_name)
         {
+            decoder.set_binlog_file_name(binlog_name.clone());
             let binlog_name = binlog_name.as_bytes();
             binlog_request = binlog_request
                 .with_filename(binlog_name)
@@ -108,7 +111,6 @@ impl SourceConnector for MySQLSourceConnector {
         }
 
         let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
-        let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
 
         debug!("Reading historical schema changes...");
         let schema_messages = kafka.poll_with_timeout(&self.connector_name, 1).await?;
@@ -126,12 +128,7 @@ impl SourceConnector for MySQLSourceConnector {
 
             let value = serde_json::from_str::<MySQLDDLPayload>(&msg.value)?;
 
-            decoder.parse_ddl_query(
-                &schema,
-                &value.ddl,
-                value.ts_ms,
-                value.metadata.pos,
-            )?;
+            decoder.parse_ddl_query(schema, &value.ddl, value.ts_ms, value.metadata.pos)?;
         }
 
         debug!("Creating Kafka message stream...");
