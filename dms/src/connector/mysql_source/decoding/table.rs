@@ -1,4 +1,4 @@
-use crate::error::error::{DMSRError, DMSRResult};
+use crate::error::{DMSRError, DMSRResult};
 
 #[derive(Debug, Clone)]
 pub struct MySQLTableColumn {

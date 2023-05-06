@@ -1,4 +1,4 @@
-use crate::error::error::{DMSRError, DMSRResult};
+use crate::error::{DMSRError, DMSRResult};
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]

@@ -1,11 +1,11 @@
 use crate::connector::mysql_source::config::MySQLSourceConfig;
-use crate::connector::mysql_source::source_metadata::MySQLSourceMetadata;
-use crate::connector::mysql_source::table::{MySQLTable, MySQLTableColumn};
-use crate::error::error::{DMSRError, DMSRResult};
-use crate::kafka::payload::base::{Operation, Payload};
-use crate::kafka::payload::ddl_payload::{DDLPayload, MySQLDDLPayload};
-use crate::kafka::payload::row_data_payload::RowDataPayload::MySQL;
-use crate::kafka::payload::row_data_payload::{MySQLRowDataPayload, RowDataPayload};
+use crate::connector::mysql_source::decoding::table::{MySQLTable, MySQLTableColumn};
+use crate::connector::mysql_source::metadata::source::MySQLSourceMetadata;
+use crate::connector::mysql_source::output::ddl::MySQLDDLOutput;
+use crate::connector::mysql_source::output::row_data::MySQLRowDataOutput;
+use crate::connector::output::ConnectorOutput;
+use crate::connector::row_data_operation::Operation;
+use crate::error::{DMSRError, DMSRResult};
 use log::{debug, error};
 use mysql_async::binlog::events::{
     DeleteRowsEvent, Event, QueryEvent, RotateEvent, RowsEventRows, TableMapEvent, UpdateRowsEvent,
@@ -14,7 +14,7 @@ use mysql_async::binlog::events::{
 use mysql_async::binlog::row::BinlogRow;
 use mysql_async::binlog::value::BinlogValue;
 use mysql_async::binlog::EventType;
-use mysql_async::Value;
+use mysql_async::{Conn, Value};
 use serde_json::json;
 use sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, Ident, ObjectName,
@@ -50,12 +50,12 @@ impl EventDecoder {
         }
     }
 
-    pub fn parse(&mut self, event: Event) -> DMSRResult<Vec<Payload>> {
+    pub fn parse(&mut self, event: Event) -> DMSRResult<Vec<ConnectorOutput>> {
         let ts = 1000 * (event.fde().create_timestamp() as u64);
         let log_pos = event.header().log_pos() as u64;
         let event_type = event.header().event_type()?;
 
-        let mut payloads: Vec<Payload> = vec![];
+        let mut payloads: Vec<ConnectorOutput> = vec![];
         match &event_type {
             EventType::QUERY_EVENT => {
                 let event = &event.read_event::<QueryEvent>()?;
@@ -129,7 +129,7 @@ impl EventDecoder {
         event: &RowsEvent,
         ts: u64,
         log_pos: u64,
-    ) -> DMSRResult<Vec<Payload>> {
+    ) -> DMSRResult<Vec<ConnectorOutput>> {
         let last_table_map_event = self.last_table_map_event_as_ref()?;
 
         let (schema, table_name) =
@@ -266,8 +266,8 @@ impl EventDecoder {
         ts: u64,
         log_pos: u64,
         op: Operation,
-    ) -> DMSRResult<Vec<Payload>> {
-        let mut payloads: Vec<Payload> = vec![];
+    ) -> DMSRResult<Vec<ConnectorOutput>> {
+        let mut outputs: Vec<ConnectorOutput> = vec![];
 
         for (before, after) in rows_data {
             let msg_source = MySQLSourceMetadata::new(
@@ -280,19 +280,19 @@ impl EventDecoder {
                 log_pos,
             );
 
-            let payload = MySQLRowDataPayload::new(
+            let output = MySQLRowDataOutput::new(
                 Some(before),
                 Some(after),
                 op.clone(),
                 ts,
                 msg_source.clone(),
             );
-            let payload = Payload::RowData(MySQL(payload));
+            let output = ConnectorOutput::MySQLRowData(output);
 
-            payloads.push(payload);
+            outputs.push(output);
         }
 
-        Ok(payloads)
+        Ok(outputs)
     }
 
     fn parse_rotate_event(&mut self, event: &RotateEvent) -> DMSRResult<()> {
@@ -310,7 +310,7 @@ impl EventDecoder {
         event: &QueryEvent,
         ts: u64,
         log_pos: u64,
-    ) -> DMSRResult<Vec<Payload>> {
+    ) -> DMSRResult<Vec<ConnectorOutput>> {
         debug!("QUERY_EVENT: {:?}\n", event);
         let schema = event.schema().to_string();
         let query = event.query().to_string();
@@ -323,7 +323,7 @@ impl EventDecoder {
         query: &str,
         ts: u64,
         log_pos: u64,
-    ) -> DMSRResult<Vec<Payload>> {
+    ) -> DMSRResult<Vec<ConnectorOutput>> {
         let dialect = MySqlDialect {};
         let ast: Vec<Statement> = Parser::parse_sql(&dialect, &query)?;
         let stmt = ast.first().ok_or(DMSRError::MySQLSourceConnectorError(
@@ -357,7 +357,7 @@ impl EventDecoder {
             } => {
                 let dropped_tables = self.parse_drop_statement(&schema, object_type, names)?;
 
-                let msg: Vec<Payload> = dropped_tables
+                let msg: Vec<ConnectorOutput> = dropped_tables
                     .iter()
                     .filter_map(|(schema, table)| {
                         self.query_event_to_kafka_message(schema, table, &query, ts, log_pos)
@@ -387,7 +387,7 @@ impl EventDecoder {
         ddl: &str,
         ts: u64,
         log_pos: u64,
-    ) -> DMSRResult<Payload> {
+    ) -> DMSRResult<ConnectorOutput> {
         let metadata = MySQLSourceMetadata::new(
             &self.connector_name,
             &self.connector_config.db,
@@ -398,10 +398,10 @@ impl EventDecoder {
             log_pos,
         );
 
-        let payload = MySQLDDLPayload::new(ddl, ts, metadata);
-        let payload = DDLPayload::MySQL(payload);
+        let output = MySQLDDLOutput::new(ddl.to_string(), ts, metadata);
+        let output = ConnectorOutput::MySQLDDL(output);
 
-        Ok(Payload::DDL(payload))
+        Ok(output)
     }
 
     fn parse_create_table_statement(
@@ -550,7 +550,7 @@ impl EventDecoder {
         table: &str,
         ts: u64,
         log_pos: u64,
-    ) -> DMSRResult<Payload> {
+    ) -> DMSRResult<ConnectorOutput> {
         let msg_metadata = MySQLSourceMetadata::new(
             &self.connector_name,
             &self.connector_config.db,
@@ -561,10 +561,10 @@ impl EventDecoder {
             log_pos,
         );
 
-        let payload = MySQLRowDataPayload::new(None, None, Operation::Truncate, ts, msg_metadata);
-        let payload = Payload::RowData(MySQL(payload));
+        let output = MySQLRowDataOutput::new(None, None, Operation::Truncate, ts, msg_metadata);
+        let output = ConnectorOutput::MySQLRowData(output);
 
-        Ok(payload)
+        Ok(output)
     }
 
     fn parse_add_column_statement(

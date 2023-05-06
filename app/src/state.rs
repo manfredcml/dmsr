@@ -1,4 +1,4 @@
-use dms::error::error::DMSRResult;
+use dms::error::DMSRResult;
 use dms::kafka::kafka::Kafka;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

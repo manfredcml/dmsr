@@ -1,10 +1,9 @@
-use crate::connector::kind::ConnectorKind;
-use crate::kafka::metadata::ConnectorMetadata;
+use crate::connector::r#type::ConnectorType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct MySQLOffsetMetadata {
-    pub connector_type: ConnectorKind,
+    pub connector_type: ConnectorType,
     pub connector_name: String,
     pub db: String,
     pub server_id: u32,
@@ -15,9 +14,16 @@ pub struct MySQLOffsetMetadata {
 }
 
 impl MySQLOffsetMetadata {
-    pub fn new(connector_name: &str, db: &str, server_id: u32, file: &str, pos: u64, kafka_topic: &str) -> Self {
+    pub fn new(
+        connector_name: &str,
+        db: &str,
+        server_id: u32,
+        file: &str,
+        pos: u64,
+        kafka_topic: &str,
+    ) -> Self {
         MySQLOffsetMetadata {
-            connector_type: ConnectorKind::MySQLSource,
+            connector_type: ConnectorType::MySQLSource,
             connector_name: connector_name.to_string(),
             db: db.to_string(),
             server_id,
@@ -28,7 +34,7 @@ impl MySQLOffsetMetadata {
     }
 }
 
-impl ConnectorMetadata for MySQLOffsetMetadata {
+impl MySQLOffsetMetadata {
     fn kafka_topic(&self) -> String {
         self.kafka_topic.clone()
     }

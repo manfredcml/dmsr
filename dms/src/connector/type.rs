@@ -1,9 +1,9 @@
-use crate::error::error::DMSRError;
+use crate::error::DMSRError;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub enum ConnectorKind {
+pub enum ConnectorType {
     #[serde(rename = "postgres_source")]
     PostgresSource,
 
@@ -11,23 +11,23 @@ pub enum ConnectorKind {
     MySQLSource,
 }
 
-impl FromStr for ConnectorKind {
+impl FromStr for ConnectorType {
     type Err = DMSRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "postgres_source" => Ok(ConnectorKind::PostgresSource),
-            "mysql_source" => Ok(ConnectorKind::MySQLSource),
+            "postgres_source" => Ok(ConnectorType::PostgresSource),
+            "mysql_source" => Ok(ConnectorType::MySQLSource),
             _ => Err(DMSRError::UnknownConnectorError(s.to_string())),
         }
     }
 }
 
-impl ToString for ConnectorKind {
+impl ToString for ConnectorType {
     fn to_string(&self) -> String {
         match self {
-            ConnectorKind::PostgresSource => "postgres_source".to_string(),
-            ConnectorKind::MySQLSource => "mysql_source".to_string(),
+            ConnectorType::PostgresSource => "postgres_source".to_string(),
+            ConnectorType::MySQLSource => "mysql_source".to_string(),
         }
     }
 }

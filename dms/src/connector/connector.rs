@@ -1,4 +1,4 @@
-use crate::error::error::DMSRResult;
+use crate::error::DMSRResult;
 use crate::kafka::kafka::Kafka;
 use crate::kafka::message::KafkaMessage;
 use async_trait::async_trait;
@@ -10,7 +10,6 @@ pub type KafkaMessageStream = Pin<Box<dyn Stream<Item = DMSRResult<KafkaMessage>
 #[async_trait]
 pub trait SourceConnector {
     type Config;
-    type Metadata;
 
     async fn new(name: String, config: Self::Config) -> DMSRResult<Box<Self>>
     where

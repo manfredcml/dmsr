@@ -12,13 +12,13 @@ use actix_web::{web, App, HttpServer};
 use clap::Parser;
 use dms::connector::config::ConnectorConfig;
 use dms::connector::connector::SourceConnector;
-use dms::connector::kind::ConnectorKind;
 use dms::connector::mysql_source::config::MySQLSourceConfig;
 use dms::connector::mysql_source::connector::MySQLSourceConnector;
+use dms::connector::r#type::ConnectorType;
 // use dms::connector::postgres_sink::connector::PostgresSinkConnector;
 use dms::connector::postgres_source::config::PostgresSourceConfig;
 // use dms::connector::postgres_source::connector::PostgresSourceConnector;
-use dms::error::error::{DMSRError, DMSRResult};
+use dms::error::{DMSRError, DMSRResult};
 use dms::kafka::config::KafkaConfig;
 use dms::kafka::kafka::Kafka;
 use log::info;
@@ -96,7 +96,7 @@ async fn subscribe_to_config_topic(
         let active_connectors = Arc::clone(&active_connectors);
 
         match connector_type {
-            ConnectorKind::PostgresSource => {
+            ConnectorType::PostgresSource => {
                 // start_connector::<PostgresSourceConfig, PostgresSourceConnector>(
                 //     &kafka.config,
                 //     connector_name,
@@ -105,7 +105,7 @@ async fn subscribe_to_config_topic(
                 // )
                 // .await?;
             }
-            ConnectorKind::MySQLSource => {
+            ConnectorType::MySQLSource => {
                 start_connector::<MySQLSourceConfig, MySQLSourceConnector>(
                     &kafka.config,
                     connector_name,
@@ -147,7 +147,10 @@ where
 
         info!("Preparing stream...");
         let mut stream = connector.stream_messages(&kafka).await.unwrap();
-        connector.publish_messages(&kafka, &mut stream).await.unwrap();
+        connector
+            .publish_messages(&kafka, &mut stream)
+            .await
+            .unwrap();
 
         info!("Stream stopped");
 

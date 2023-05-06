@@ -1,4 +1,4 @@
-use crate::error::error::{DMSRError, DMSRResult};
+use crate::error::{DMSRError, DMSRResult};
 use chrono::NaiveDateTime;
 use strum_macros::{EnumString, EnumVariantNames};
 

@@ -1,6 +1,6 @@
 pub mod config;
 pub mod connector;
-pub mod decoder;
-pub mod offset_metadata;
-pub mod source_metadata;
-pub mod table;
+pub mod decoding;
+pub mod metadata;
+pub mod output;
+pub mod snapshot_impl;

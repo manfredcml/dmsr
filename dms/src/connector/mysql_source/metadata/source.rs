@@ -1,10 +1,9 @@
-use crate::connector::kind::ConnectorKind;
-use crate::kafka::metadata::ConnectorMetadata;
+use crate::connector::r#type::ConnectorType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct MySQLSourceMetadata {
-    pub connector_type: ConnectorKind,
+    pub connector_type: ConnectorType,
     pub connector_name: String,
     pub db: String,
     pub schema: String,
@@ -25,7 +24,7 @@ impl MySQLSourceMetadata {
         pos: u64,
     ) -> Self {
         MySQLSourceMetadata {
-            connector_type: ConnectorKind::MySQLSource,
+            connector_type: ConnectorType::MySQLSource,
             connector_name: connector_name.to_string(),
             db: db.to_string(),
             schema: schema.to_string(),
@@ -37,20 +36,20 @@ impl MySQLSourceMetadata {
     }
 }
 
-impl ConnectorMetadata for MySQLSourceMetadata {
-    fn kafka_topic(&self) -> String {
+impl MySQLSourceMetadata {
+    pub fn kafka_topic(&self) -> String {
         format!("{}.{}.{}", self.connector_name, self.schema, self.table)
     }
 
-    fn schema(&self) -> &str {
+    pub fn schema(&self) -> &str {
         &self.schema
     }
 
-    fn table(&self) -> &str {
+    pub fn table(&self) -> &str {
         &self.table
     }
 
-    fn connector_name(&self) -> &str {
+    pub fn connector_name(&self) -> &str {
         &self.connector_name
     }
 }
