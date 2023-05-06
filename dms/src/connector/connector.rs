@@ -5,8 +5,6 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
 
-pub type KafkaMessageStream = Pin<Box<dyn Stream<Item = DMSRResult<KafkaMessage>> + Send + Sync>>;
-
 #[async_trait]
 pub trait SourceConnector {
     type Config;
@@ -17,11 +15,5 @@ pub trait SourceConnector {
 
     async fn snapshot(&mut self, kafka: &Kafka) -> DMSRResult<()>;
 
-    async fn stream_messages(&mut self, kafka: &Kafka) -> DMSRResult<KafkaMessageStream>;
-
-    async fn publish_messages(
-        &self,
-        kafka: &Kafka,
-        stream: &mut KafkaMessageStream,
-    ) -> DMSRResult<()>;
+    async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()>;
 }

@@ -8,7 +8,6 @@ pub enum DMSRError {
     MissingValueError(String),
     KafkaError(String),
     StdIoError(std::io::Error),
-    SerdeYamlError(serde_yaml::Error),
     SerdeJsonError(serde_json::Error),
     Utf8Error(String),
     UnknownConnectorError(String),
@@ -118,11 +117,5 @@ impl From<std::io::Error> for DMSRError {
 impl From<KafkaError> for DMSRError {
     fn from(error: KafkaError) -> Self {
         DMSRError::KafkaError(error.to_string())
-    }
-}
-
-impl From<serde_yaml::Error> for DMSRError {
-    fn from(error: serde_yaml::Error) -> Self {
-        DMSRError::SerdeYamlError(error)
     }
 }

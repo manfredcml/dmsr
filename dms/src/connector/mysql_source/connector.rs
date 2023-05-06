@@ -1,22 +1,24 @@
-use crate::connector::connector::{KafkaMessageStream, SourceConnector};
+use crate::connector::connector::SourceConnector;
+use crate::connector::mysql_source::binlog_struct::MySQLTable;
 use crate::connector::mysql_source::config::MySQLSourceConfig;
-use crate::connector::mysql_source::decoding::decoder::EventDecoder;
-use crate::connector::mysql_source::output::ddl::MySQLDDLOutput;
 use crate::connector::output::OutputEncoding;
-use crate::error::{DMSRError, DMSRResult};
+use crate::error::DMSRResult;
 use crate::kafka::kafka::Kafka;
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
-use mysql_async::{BinlogRequest, Pool};
-use serde_json::Value;
+use mysql_async::binlog::events::TableMapEvent;
+use mysql_async::Pool;
+use std::collections::HashMap;
 
 pub struct MySQLSourceConnector {
     pub(crate) config: MySQLSourceConfig,
     pub(crate) connector_name: String,
     pub(crate) pool: Pool,
-    pub(crate) latest_binlog_pos: Option<u64>,
-    pub(crate) latest_binlog_name: Option<String>,
+    pub(crate) binlog_pos: Option<u64>,
+    pub(crate) binlog_file_name: Option<String>,
+    pub(crate) table_metadata_map: HashMap<String, MySQLTable>,
+    pub(crate) last_table_map_event: Option<TableMapEvent<'static>>,
 }
 
 #[async_trait]
@@ -33,8 +35,10 @@ impl SourceConnector for MySQLSourceConnector {
             config,
             connector_name,
             pool,
-            latest_binlog_pos: None,
-            latest_binlog_name: None,
+            binlog_pos: None,
+            binlog_file_name: None,
+            table_metadata_map: HashMap::new(),
+            last_table_map_event: None,
         }))
     }
 
@@ -42,8 +46,8 @@ impl SourceConnector for MySQLSourceConnector {
         let (binlog_name, binlog_pos) = self.get_latest_binlog_info(kafka).await?;
 
         if !binlog_name.is_empty() {
-            self.latest_binlog_name = Some(binlog_name);
-            self.latest_binlog_pos = Some(binlog_pos);
+            self.binlog_file_name = Some(binlog_name);
+            self.binlog_pos = Some(binlog_pos);
             return Ok(());
         }
 
@@ -72,70 +76,25 @@ impl SourceConnector for MySQLSourceConnector {
         Ok(())
     }
 
-    async fn stream_messages(&mut self, kafka: &Kafka) -> DMSRResult<KafkaMessageStream> {
-        let mut decoder = EventDecoder::new(self.connector_name.clone(), self.config.clone());
-
-        let db_conn_binlog = self.pool.get_conn().await?;
-        let mut binlog_request = BinlogRequest::new(self.config.server_id);
-
-        if let (Some(binlog_pos), Some(binlog_name)) =
-            (&self.latest_binlog_pos, &self.latest_binlog_name)
-        {
-            decoder.set_binlog_file_name(binlog_name.clone());
-            let binlog_name = binlog_name.as_bytes();
-            binlog_request = binlog_request
-                .with_filename(binlog_name)
-                .with_pos(*binlog_pos);
-        }
-
-        let mut cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
+    async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()> {
+        let mut binlog_stream = self.get_binlog_stream().await?;
 
         debug!("Reading historical schema changes...");
-        let schema_messages = kafka.poll_with_timeout(&self.connector_name, 1).await?;
-
-        for msg in schema_messages {
-            let key_json = serde_json::from_str::<Value>(&msg.key)?;
-
-            let schema = key_json
-                .get("schema")
-                .ok_or(DMSRError::MySQLSourceConnectorError(
-                    "Schema not found in schema message".into(),
-                ))?
-                .as_str()
-                .unwrap_or_default();
-
-            let value = serde_json::from_str::<MySQLDDLOutput>(&msg.value)?;
-
-            decoder.parse_ddl_query(schema, &value.ddl, value.ts_ms, value.metadata.pos)?;
-        }
+        self.read_historical_schema_changes(kafka).await?;
 
         debug!("Creating Kafka message stream...");
         let kafka_config = kafka.config.clone();
-        let stream: KafkaMessageStream = Box::pin(async_stream::stream! {
-            while let Some(event) = cdc_stream.next().await {
-                debug!("Received event from MySQL: {:?}", event);
-                let event = event?;
-                let outputs = decoder.parse(event)?;
-                for o in outputs {
-                    let msg = o.to_kafka_message(&kafka_config, OutputEncoding::Default)?;
-                    yield Ok(msg);
-                }
+
+        while let Some(event) = binlog_stream.next().await {
+            debug!("Received event from MySQL: {:?}", event);
+            let event = event?;
+            let outputs = self.parse(event)?;
+            for o in outputs {
+                let message = o.to_kafka_message(&kafka_config, OutputEncoding::Default)?;
+                kafka.produce(message).await?;
             }
-        });
-
-        Ok(stream)
-    }
-
-    async fn publish_messages(
-        &self,
-        kafka: &Kafka,
-        stream: &mut KafkaMessageStream,
-    ) -> DMSRResult<()> {
-        while let Some(message) = stream.next().await {
-            debug!("Sending message to kafka: {:?}", message);
-            let message = message?;
-            kafka.produce(message).await?;
         }
+
         Ok(())
     }
 }

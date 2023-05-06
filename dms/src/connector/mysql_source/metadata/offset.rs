@@ -33,21 +33,3 @@ impl MySQLOffsetMetadata {
         }
     }
 }
-
-impl MySQLOffsetMetadata {
-    fn kafka_topic(&self) -> String {
-        self.kafka_topic.clone()
-    }
-
-    fn schema(&self) -> &str {
-        ""
-    }
-
-    fn table(&self) -> &str {
-        ""
-    }
-
-    fn connector_name(&self) -> &str {
-        &self.connector_name
-    }
-}
