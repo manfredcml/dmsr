@@ -7,6 +7,12 @@ pub struct KafkaMessage {
     pub value: String,
 }
 
+impl Default for KafkaMessage {
+    fn default() -> Self {
+        KafkaMessage::new()
+    }
+}
+
 impl KafkaMessage {
     pub fn new() -> Self {
         KafkaMessage {

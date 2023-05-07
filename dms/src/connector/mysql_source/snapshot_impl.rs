@@ -6,7 +6,7 @@ use crate::connector::mysql_source::output::row_data::MySQLRowDataOutput;
 use crate::connector::output::{ConnectorOutput, OutputEncoding};
 use crate::connector::row_data_operation::Operation;
 use crate::error::{DMSRError, DMSRResult};
-use crate::kafka::kafka::Kafka;
+use crate::kafka::kafka_client::Kafka;
 use log::debug;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row};
@@ -35,7 +35,7 @@ impl MySQLSourceConnector {
             return Ok((binlog_info.file().to_string(), binlog_info.pos()));
         }
 
-        return Ok((String::new(), 0));
+        Ok((String::new(), 0))
     }
 
     pub(crate) async fn lock_tables(&self, conn: &mut Conn) -> DMSRResult<()> {

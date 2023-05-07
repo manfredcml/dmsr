@@ -9,3 +9,23 @@ pub struct MySQLSourceConfig {
     pub db: String,
     pub server_id: u32,
 }
+
+impl MySQLSourceConfig {
+    pub fn new(
+        host: String,
+        port: u16,
+        user: String,
+        password: String,
+        db: String,
+        server_id: u32,
+    ) -> Self {
+        MySQLSourceConfig {
+            host,
+            port,
+            user,
+            password,
+            db,
+            server_id,
+        }
+    }
+}

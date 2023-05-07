@@ -12,6 +12,18 @@ use std::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
 
+#[derive(Debug)]
+pub struct RawKafkaMessageKeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+impl RawKafkaMessageKeyValue {
+    pub fn new(key: String, value: String) -> Self {
+        RawKafkaMessageKeyValue { key, value }
+    }
+}
+
 pub struct Kafka {
     pub config: KafkaConfig,
     pub admin: AdminClient<DefaultClientContext>,
@@ -76,12 +88,22 @@ impl Kafka {
         }
     }
 
-    pub fn get_consumer(&self, topic: &str) -> DMSRResult<BaseConsumer> {
+    pub fn get_base_consumer(&self, topic: &str) -> DMSRResult<BaseConsumer> {
         let mut config = ClientConfig::new();
         config.set("group.id", Uuid::new_v4().to_string());
         config.set("bootstrap.servers", &self.config.bootstrap_servers);
         config.set("auto.offset.reset", "smallest");
         let consumer: BaseConsumer = config.create()?;
+        consumer.subscribe(&[topic])?;
+        Ok(consumer)
+    }
+
+    pub fn get_stream_consumer(&self, topic: &str) -> DMSRResult<StreamConsumer> {
+        let mut config = ClientConfig::new();
+        config.set("group.id", Uuid::new_v4().to_string());
+        config.set("bootstrap.servers", &self.config.bootstrap_servers);
+        config.set("auto.offset.reset", "smallest");
+        let consumer: StreamConsumer = config.create()?;
         consumer.subscribe(&[topic])?;
         Ok(consumer)
     }
@@ -125,16 +147,5 @@ impl Kafka {
         }
 
         Ok(messages)
-    }
-}
-
-pub struct RawKafkaMessageKeyValue {
-    pub key: String,
-    pub value: String,
-}
-
-impl RawKafkaMessageKeyValue {
-    pub fn new(key: String, value: String) -> Self {
-        RawKafkaMessageKeyValue { key, value }
     }
 }

@@ -6,7 +6,7 @@ use crate::connector::mysql_source::output::row_data::MySQLRowDataOutput;
 use crate::connector::output::ConnectorOutput;
 use crate::connector::row_data_operation::Operation;
 use crate::error::{DMSRError, DMSRResult};
-use crate::kafka::kafka::Kafka;
+use crate::kafka::kafka_client::Kafka;
 use log::{debug, error};
 use mysql_async::binlog::events::{
     DeleteRowsEvent, Event, QueryEvent, RotateEvent, RowsEventRows, TableMapEvent, UpdateRowsEvent,
@@ -339,7 +339,7 @@ impl MySQLSourceConnector {
         log_pos: u64,
     ) -> DMSRResult<Vec<ConnectorOutput>> {
         let dialect = MySqlDialect {};
-        let ast: Vec<Statement> = Parser::parse_sql(&dialect, &query)?;
+        let ast: Vec<Statement> = Parser::parse_sql(&dialect, query)?;
         let stmt = ast.first().ok_or(DMSRError::MySQLSourceConnectorError(
             format!("Query not supported by parser: {}", query).into(),
         ))?;
@@ -351,30 +351,30 @@ impl MySQLSourceConnector {
                 constraints,
                 ..
             } => {
-                let (schema, table) = Self::parse_schema_table_from_sqlparser(&schema, name)?;
+                let (schema, table) = Self::parse_schema_table_from_sqlparser(schema, name)?;
                 self.parse_create_table_statement(&schema, &table, columns, constraints)?;
                 let msg =
-                    self.query_event_to_kafka_message(&schema, &table, &query, ts, log_pos)?;
+                    self.query_event_to_kafka_message(&schema, &table, query, ts, log_pos)?;
                 Ok(vec![msg])
             }
             Statement::AlterTable {
                 name, operation, ..
             } => {
-                let (schema, table) = Self::parse_schema_table_from_sqlparser(&schema, name)?;
+                let (schema, table) = Self::parse_schema_table_from_sqlparser(schema, name)?;
                 self.parse_alter_table_statement(&schema, &table, operation)?;
                 let msg =
-                    self.query_event_to_kafka_message(&schema, &table, &query, ts, log_pos)?;
+                    self.query_event_to_kafka_message(&schema, &table, query, ts, log_pos)?;
                 Ok(vec![msg])
             }
             Statement::Drop {
                 object_type, names, ..
             } => {
-                let dropped_tables = self.parse_drop_statement(&schema, object_type, names)?;
+                let dropped_tables = self.parse_drop_statement(schema, object_type, names)?;
 
                 let msg: Vec<ConnectorOutput> = dropped_tables
                     .iter()
                     .filter_map(|(schema, table)| {
-                        self.query_event_to_kafka_message(schema, table, &query, ts, log_pos)
+                        self.query_event_to_kafka_message(schema, table, query, ts, log_pos)
                             .ok()
                     })
                     .collect();
@@ -382,7 +382,7 @@ impl MySQLSourceConnector {
                 Ok(msg)
             }
             Statement::Truncate { table_name, .. } => {
-                let (schema, table) = Self::parse_schema_table_from_sqlparser(&schema, table_name)?;
+                let (schema, table) = Self::parse_schema_table_from_sqlparser(schema, table_name)?;
                 let msg = self.parse_truncate_statement(&schema, &table, ts, log_pos)?;
                 Ok(vec![msg])
             }
@@ -520,7 +520,7 @@ impl MySQLSourceConnector {
                 new_column_name,
             )?,
             AlterTableOperation::RenameTable { table_name } => {
-                self.parse_rename_table_statement(&full_table_name, &schema, table_name)?
+                self.parse_rename_table_statement(&full_table_name, schema, table_name)?
             }
             _ => {
                 return Err(DMSRError::MySQLSourceConnectorError(

@@ -1,9 +1,9 @@
-use crate::connector::connector::SourceConnector;
+use crate::connector::source_connector::SourceConnector;
 use crate::connector::mysql_source::binlog_struct::MySQLTable;
 use crate::connector::mysql_source::config::MySQLSourceConfig;
 use crate::connector::output::OutputEncoding;
 use crate::error::DMSRResult;
-use crate::kafka::kafka::Kafka;
+use crate::kafka::kafka_client::Kafka;
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;

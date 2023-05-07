@@ -1,9 +1,6 @@
 use crate::error::DMSRResult;
-use crate::kafka::kafka::Kafka;
-use crate::kafka::message::KafkaMessage;
+use crate::kafka::kafka_client::Kafka;
 use async_trait::async_trait;
-use futures::Stream;
-use std::pin::Pin;
 
 #[async_trait]
 pub trait SourceConnector {

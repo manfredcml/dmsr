@@ -1,5 +1,5 @@
 use dms::error::DMSRResult;
-use dms::kafka::kafka::Kafka;
+use dms::kafka::kafka_client::Kafka;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
