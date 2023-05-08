@@ -2,7 +2,10 @@ use dms::kafka::config::KafkaConfig;
 use dms::kafka::kafka_client::Kafka;
 use dms::kafka::message::KafkaMessage;
 use futures::StreamExt;
-use rdkafka::Message;
+use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::{ClientConfig, Message};
+use std::time::Duration;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn test_kafka_new() {
@@ -37,6 +40,28 @@ async fn test_kafka_create_topic() {
     let clean_up_policy = "delete";
     let result = kafka.create_topic(topic_name, clean_up_policy).await;
     assert!(result.is_ok());
+
+    let mut config = ClientConfig::new();
+    config.set("group.id", Uuid::new_v4().to_string());
+    config.set("bootstrap.servers", &kafka.config.bootstrap_servers);
+    config.set("auto.offset.reset", "smallest");
+    let consumer: BaseConsumer = config.create().unwrap();
+
+    let metadata = consumer
+        .fetch_metadata(Some("test-topic-compact"), Duration::from_secs(1))
+        .unwrap();
+    let metadata = metadata.topics();
+    for topic in metadata.iter() {
+        assert_eq!(topic.name(), "test-topic-compact");
+    }
+
+    let metadata = consumer
+        .fetch_metadata(Some("test-topic-delete"), Duration::from_secs(1))
+        .unwrap();
+    let metadata = metadata.topics();
+    for topic in metadata.iter() {
+        assert_eq!(topic.name(), "test-topic-delete");
+    }
 }
 
 #[tokio::test]
