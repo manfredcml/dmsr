@@ -31,3 +31,27 @@ impl ToString for ConnectorType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_str() {
+        assert_eq!(
+            ConnectorType::from_str("postgres_source").unwrap(),
+            ConnectorType::PostgresSource
+        );
+        assert_eq!(
+            ConnectorType::from_str("mysql_source").unwrap(),
+            ConnectorType::MySQLSource
+        );
+        assert!(ConnectorType::from_str("unknown_source").is_err());
+    }
+
+    #[test]
+    fn test_to_string() {
+        assert_eq!(ConnectorType::PostgresSource.to_string(), "postgres_source");
+        assert_eq!(ConnectorType::MySQLSource.to_string(), "mysql_source");
+    }
+}
