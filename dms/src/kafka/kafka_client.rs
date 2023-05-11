@@ -32,6 +32,10 @@ pub struct Kafka {
 }
 
 impl Kafka {
+    pub fn config(&self) -> &KafkaConfig {
+        &self.config
+    }
+
     pub async fn new(config: &KafkaConfig) -> DMSRResult<Self> {
         let mut admin_config = ClientConfig::new();
         admin_config.set("bootstrap.servers", &config.bootstrap_servers);

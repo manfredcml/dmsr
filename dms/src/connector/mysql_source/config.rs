@@ -30,9 +30,33 @@ impl MySQLSourceConfig {
     }
 }
 
+impl Default for MySQLSourceConfig {
+    fn default() -> Self {
+        MySQLSourceConfig {
+            host: "localhost".to_string(),
+            port: 3306,
+            user: "root".to_string(),
+            password: "".to_string(),
+            db: "mysql".to_string(),
+            server_id: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_mysql_source_config_default() {
+        let config = MySQLSourceConfig::default();
+        assert_eq!(config.host, "localhost");
+        assert_eq!(config.port, 3306);
+        assert_eq!(config.user, "root");
+        assert_eq!(config.password, "");
+        assert_eq!(config.db, "mysql");
+        assert_eq!(config.server_id, 0);
+    }
 
     #[test]
     fn test_new_mysql_source_config() {

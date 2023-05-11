@@ -1,3 +1,4 @@
+use crate::kafka::kafka_client::Kafka;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
@@ -6,6 +7,17 @@ pub struct KafkaConfig {
     pub config_topic: String,
     pub offset_topic: String,
     pub status_topic: String,
+}
+
+impl Default for KafkaConfig {
+    fn default() -> Self {
+        KafkaConfig::new(
+            "localhost:9092".to_string(),
+            "dms_config".to_string(),
+            "dms_offset".to_string(),
+            "dms_status".to_string(),
+        )
+    }
 }
 
 impl KafkaConfig {
