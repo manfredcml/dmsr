@@ -94,7 +94,7 @@ mod tests {
             Some(json!({"id": 2})),
             Operation::Update,
             9876,
-            metadata.clone(),
+            metadata,
         );
         let cloned_row_data_output = row_data_output.clone();
         assert_eq!(row_data_output, cloned_row_data_output);

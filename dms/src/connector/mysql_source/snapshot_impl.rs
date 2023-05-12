@@ -325,6 +325,7 @@ mod tests {
     use mysql_common::packets::Column;
     use mysql_common::row::new_row;
     use mysql_common::Value;
+    use rdkafka::message::ToBytes;
     use std::sync::Arc;
 
     mock! {
@@ -625,29 +626,48 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_table_data() {
-        // let connector = MySQLSourceConnector::new(String::default(), MySQLSourceConfig::default())
-        //     .await
-        //     .unwrap();
-        //
-        // let mut conn = MockConn::new();
-        // conn.expect_query()
-        //     .withf(|q| q.starts_with("SELECT * FROM"))
-        //     .returning(|_| {
-        //         let values = vec![Value::Int(123), Value::NULL];
-        //
-        //         let columns = vec![
-        //             Column::new(ColumnType::MYSQL_TYPE_VARCHAR),
-        //             Column::new(ColumnType::MYSQL_TYPE_NULL),
-        //         ];
-        //
-        //         let row = new_row(
-        //             values,
-        //             Arc::from(columns.as_slice())
-        //         );
-        //
-        //         Ok(vec![row])
-        //     });
-        //
-        // let mut kafka = MockKafka::new();
+        let connector =
+            MySQLSourceConnector::new("test-connector".to_string(), MySQLSourceConfig::default())
+                .await
+                .unwrap();
+
+        let mut conn = MockConn::new();
+        conn.expect_query()
+            .withf(|q| q.starts_with("SELECT * FROM"))
+            .returning(|_| {
+                let values = vec![Value::Bytes("123".to_bytes().to_vec()), Value::NULL];
+
+                let columns = vec![
+                    Column::new(ColumnType::MYSQL_TYPE_VARCHAR).with_name("col_1".to_bytes()),
+                    Column::new(ColumnType::MYSQL_TYPE_NULL).with_name("col_2".to_bytes()),
+                ];
+
+                let row = new_row(values, Arc::from(columns.as_slice()));
+
+                Ok(vec![row])
+            });
+
+        let mut kafka = MockKafka::new();
+        kafka.expect_config().return_const(KafkaConfig::default());
+        kafka
+            .expect_produce()
+            .withf(|msg| {
+                msg.topic.eq("test-connector.test_schema.tbl_1")
+                && msg.key.eq(&None)
+                && msg.value.contains(r#"{"before":null,"after":{"col_1":"123","col_2":null},"#)
+                && msg.value.contains(r#""op":"r","#)
+                && msg.value.contains(r#""metadata":{"connector_type":"mysql_source","connector_name":"test-connector","db":"mysql","schema":"test_schema","table":"tbl_1","server_id":0,"file":"binlog.file","pos":123}}"#)
+            })
+            .returning(|_| Ok(()));
+
+        let mut columns: HashMap<(String, String), Vec<String>> = HashMap::new();
+        columns.insert(
+            ("test_schema".to_string(), "tbl_1".to_string()),
+            vec!["col_1".to_string(), "col_2".to_string()],
+        );
+        connector
+            .read_table_data(&kafka, &mut conn, &columns, "binlog.file", &123_u64)
+            .await
+            .unwrap();
     }
 }
