@@ -319,7 +319,13 @@ mod tests {
     use crate::connector::source_connector::SourceConnector;
     use crate::kafka::config::KafkaConfig;
     use async_trait::async_trait;
-    use mockall::{automock, mock};
+    use mockall::mock;
+    use mysql_async::Row;
+    use mysql_common::constants::ColumnType;
+    use mysql_common::packets::Column;
+    use mysql_common::row::new_row;
+    use mysql_common::Value;
+    use std::sync::Arc;
 
     mock! {
         Conn {}
@@ -577,12 +583,71 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_ddls() {
-        let connector = MySQLSourceConnector::new(String::default(), MySQLSourceConfig::default())
-            .await
-            .unwrap();
+        let connector =
+            MySQLSourceConnector::new("test-connector".to_string(), MySQLSourceConfig::default())
+                .await
+                .unwrap();
 
         let mut conn = MockConn::new();
+        conn.expect_query()
+            .withf(|q| q.eq("SHOW CREATE TABLE test_schema.tbl_1"))
+            .returning(|_| {
+                Ok(vec![(
+                    "tbl_1".to_string(),
+                    "CREATE TABLE tbl_1 (id INT)".to_string(),
+                )])
+            });
 
+        let mut kafka = MockKafka::new();
+        kafka.expect_config().return_const(KafkaConfig::default());
+        kafka
+            .expect_produce()
+            .withf(|msg| {
+                msg.topic.eq("test-connector")
+                    && msg.key.eq(&Some(r#"{"schema":"test_schema","table":"tbl_1"}"#.to_string()))
+                    && msg.value.contains(r#"{"ddl":"CREATE TABLE tbl_1 (id INT)","ts_ms":"#)
+                    && msg.value.contains(r#""metadata":{"connector_type":"mysql_source","connector_name":"test-connector","db":"mysql","schema":"test_schema","table":"tbl_1","server_id":0,"file":"binlog.file","pos":123}}"#)
 
+            })
+            .returning(|_| Ok(()));
+
+        connector
+            .read_ddls(
+                &kafka,
+                &mut conn,
+                "binlog.file",
+                &123_u64,
+                &[("test_schema".to_string(), "tbl_1".to_string())],
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_table_data() {
+        // let connector = MySQLSourceConnector::new(String::default(), MySQLSourceConfig::default())
+        //     .await
+        //     .unwrap();
+        //
+        // let mut conn = MockConn::new();
+        // conn.expect_query()
+        //     .withf(|q| q.starts_with("SELECT * FROM"))
+        //     .returning(|_| {
+        //         let values = vec![Value::Int(123), Value::NULL];
+        //
+        //         let columns = vec![
+        //             Column::new(ColumnType::MYSQL_TYPE_VARCHAR),
+        //             Column::new(ColumnType::MYSQL_TYPE_NULL),
+        //         ];
+        //
+        //         let row = new_row(
+        //             values,
+        //             Arc::from(columns.as_slice())
+        //         );
+        //
+        //         Ok(vec![row])
+        //     });
+        //
+        // let mut kafka = MockKafka::new();
     }
 }
