@@ -320,7 +320,6 @@ mod tests {
     use crate::kafka::config::KafkaConfig;
     use async_trait::async_trait;
     use mockall::mock;
-    use mysql_async::Row;
     use mysql_common::constants::ColumnType;
     use mysql_common::packets::Column;
     use mysql_common::row::new_row;
@@ -667,6 +666,30 @@ mod tests {
         );
         connector
             .read_table_data(&kafka, &mut conn, &columns, "binlog.file", &123_u64)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_offsets() {
+        let connector =
+            MySQLSourceConnector::new("test-connector".to_string(), MySQLSourceConfig::default())
+                .await
+                .unwrap();
+
+        let mut kafka = MockKafka::new();
+        kafka.expect_config().return_const(KafkaConfig::default());
+        kafka
+            .expect_produce()
+            .withf(|msg| {
+                msg.topic.eq("dmsr_offset")
+                && msg.key.eq(&Some(r#"{"connector_name":"test-connector"}"#.to_string()))
+                && msg.value.eq(r#"{"connector_name":"test-connector","db":"mysql","server_id":0,"file":"binlog.file","pos":123}"#)
+            })
+          .returning(|_| Ok(()));
+
+        connector
+            .update_offsets(&kafka, "binlog.file", &123_u64)
             .await
             .unwrap();
     }

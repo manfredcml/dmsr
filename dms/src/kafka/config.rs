@@ -13,9 +13,9 @@ impl Default for KafkaConfig {
     fn default() -> Self {
         KafkaConfig::new(
             "localhost:9092".to_string(),
-            "dms_config".to_string(),
-            "dms_offset".to_string(),
-            "dms_status".to_string(),
+            "dmsr_config".to_string(),
+            "dmsr_offset".to_string(),
+            "dmsr_status".to_string(),
         )
     }
 }
