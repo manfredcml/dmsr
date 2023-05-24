@@ -6,7 +6,8 @@ use crate::connector::mysql_source::output::row_data::MySQLRowDataOutput;
 use crate::connector::output::ConnectorOutput;
 use crate::connector::row_data_operation::Operation;
 use crate::error::{DMSRError, DMSRResult};
-use crate::kafka::kafka_client::Kafka;
+use crate::kafka::kafka_client::{Kafka, RawKafkaMessageKeyValue};
+use async_trait::async_trait;
 use log::{debug, error};
 use mysql_async::binlog::events::{
     DeleteRowsEvent, Event, QueryEvent, RotateEvent, RowsEventRows, TableMapEvent, UpdateRowsEvent,
@@ -15,14 +16,16 @@ use mysql_async::binlog::events::{
 use mysql_async::binlog::row::BinlogRow;
 use mysql_async::binlog::value::BinlogValue;
 use mysql_async::binlog::EventType;
-use mysql_async::{BinlogRequest, BinlogStream, Value};
+use mysql_async::{BinlogRequest, BinlogStream, Conn, Value};
+use mysql_common::binlog::events::{BinlogEventHeader, FormatDescriptionEvent};
 use serde_json::json;
 use sqlparser::ast::{
-    AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, Ident, ObjectName,
-    ObjectType, Statement, TableConstraint,
+    AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, DataType, Ident,
+    ObjectName, ObjectType, Statement, TableConstraint,
 };
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
+use std::io::Error;
 
 enum RowsEvent<'a> {
     Write(WriteRowsEvent<'a>),
@@ -30,23 +33,137 @@ enum RowsEvent<'a> {
     Delete(DeleteRowsEvent<'a>),
 }
 
-impl MySQLSourceConnector {
-    pub(crate) async fn get_binlog_stream(&self) -> DMSRResult<BinlogStream> {
-        let mut binlog_request = BinlogRequest::new(self.config.server_id);
+#[async_trait]
+pub(crate) trait KafkaInterface {
+    async fn poll_with_timeout(
+        &self,
+        topic: &str,
+        timeout: u64,
+    ) -> DMSRResult<Vec<RawKafkaMessageKeyValue>>;
+}
 
-        if let (Some(binlog_pos), Some(binlog_name)) = (&self.binlog_pos, &self.binlog_file_name) {
+#[async_trait]
+impl KafkaInterface for Kafka {
+    async fn poll_with_timeout(
+        &self,
+        topic: &str,
+        timeout: u64,
+    ) -> DMSRResult<Vec<RawKafkaMessageKeyValue>> {
+        self.poll_with_timeout(topic, timeout).await
+    }
+}
+
+#[async_trait]
+pub(crate) trait MySQLInterface {
+    async fn get_binlog_stream(
+        mut self,
+        server_id: u32,
+        binlog_pos: Option<u64>,
+        binlog_name: Option<&String>,
+    ) -> DMSRResult<BinlogStream>;
+}
+
+#[async_trait]
+impl MySQLInterface for Conn {
+    async fn get_binlog_stream(
+        mut self,
+        server_id: u32,
+        binlog_pos: Option<u64>,
+        binlog_name: Option<&String>,
+    ) -> DMSRResult<BinlogStream> {
+        let mut binlog_request = BinlogRequest::new(server_id);
+
+        if let (Some(binlog_pos), Some(binlog_name)) = (binlog_pos, binlog_name) {
             let binlog_name = binlog_name.as_bytes();
             binlog_request = binlog_request
                 .with_filename(binlog_name)
-                .with_pos(*binlog_pos);
+                .with_pos(binlog_pos);
         }
 
-        let db_conn_binlog = self.pool.get_conn().await?;
-        let cdc_stream = db_conn_binlog.get_binlog_stream(binlog_request).await?;
+        let binlog_stream = self.get_binlog_stream(binlog_request).await?;
+        Ok(binlog_stream)
+    }
+}
+
+pub(crate) trait EventInterface {
+    fn fde(&self) -> &FormatDescriptionEvent;
+    fn header(&self) -> BinlogEventHeader;
+    fn read_query_event(&self) -> Result<QueryEvent, Error>;
+    fn read_table_map_event(&self) -> Result<TableMapEvent, Error>;
+    fn read_rotate_event(&self) -> Result<RotateEvent, Error>;
+    fn read_write_rows_event(&self) -> Result<WriteRowsEvent, Error>;
+    fn read_update_rows_event(&self) -> Result<UpdateRowsEvent, Error>;
+    fn read_delete_rows_event(&self) -> Result<DeleteRowsEvent, Error>;
+}
+
+impl EventInterface for Event {
+    fn fde(&self) -> &FormatDescriptionEvent {
+        self.fde()
+    }
+
+    fn header(&self) -> BinlogEventHeader {
+        self.header()
+    }
+
+    fn read_query_event(&self) -> Result<QueryEvent, Error> {
+        self.read_event::<QueryEvent>()
+    }
+
+    fn read_table_map_event(&self) -> Result<TableMapEvent, Error> {
+        self.read_event::<TableMapEvent>()
+    }
+
+    fn read_rotate_event(&self) -> Result<RotateEvent, Error> {
+        self.read_event::<RotateEvent>()
+    }
+
+    fn read_write_rows_event(&self) -> Result<WriteRowsEvent, Error> {
+        self.read_event::<WriteRowsEvent>()
+    }
+
+    fn read_update_rows_event(&self) -> Result<UpdateRowsEvent, Error> {
+        self.read_event::<UpdateRowsEvent>()
+    }
+
+    fn read_delete_rows_event(&self) -> Result<DeleteRowsEvent, Error> {
+        self.read_event::<DeleteRowsEvent>()
+    }
+}
+
+pub(crate) trait QueryEventInterface<'a> {
+    fn schema(&self) -> String;
+    fn query(&self) -> String;
+}
+
+impl<'a> QueryEventInterface<'a> for QueryEvent<'a> {
+    fn schema(&self) -> String {
+        self.schema().to_string()
+    }
+
+    fn query(&self) -> String {
+        self.query().to_string()
+    }
+}
+
+impl MySQLSourceConnector {
+    pub(crate) async fn get_binlog_stream(
+        &self,
+        conn: impl MySQLInterface,
+    ) -> DMSRResult<BinlogStream> {
+        let cdc_stream = conn
+            .get_binlog_stream(
+                self.config.server_id,
+                self.binlog_pos,
+                self.binlog_file_name.as_ref(),
+            )
+            .await?;
         Ok(cdc_stream)
     }
 
-    pub(crate) async fn read_historical_schema_changes(&mut self, kafka: &Kafka) -> DMSRResult<()> {
+    pub(crate) async fn read_historical_schema_changes(
+        &mut self,
+        kafka: &impl KafkaInterface,
+    ) -> DMSRResult<()> {
         let schema_messages = kafka.poll_with_timeout(&self.connector_name, 1).await?;
         for msg in schema_messages {
             let key_json = serde_json::from_str::<serde_json::Value>(&msg.key)?;
@@ -64,35 +181,36 @@ impl MySQLSourceConnector {
         Ok(())
     }
 
-    pub(crate) fn parse(&mut self, event: Event) -> DMSRResult<Vec<ConnectorOutput>> {
+    pub(crate) fn parse(&mut self, event: impl EventInterface) -> DMSRResult<Vec<ConnectorOutput>> {
         let ts = 1000 * (event.fde().create_timestamp() as u64);
         let log_pos = event.header().log_pos() as u64;
         let event_type = event.header().event_type()?;
 
         let mut payloads: Vec<ConnectorOutput> = vec![];
-        match &event_type {
+        match event_type {
             EventType::QUERY_EVENT => {
-                let event = &event.read_event::<QueryEvent>()?;
-                if let Ok(message) = self.parse_query_event(event, ts, log_pos) {
-                    payloads = message;
-                }
+                // let event = event.read_query_event()?;
+                // self.testing(event);
+                // if let Ok(message) = self.parse_query_event(event, ts, log_pos) {
+                //     payloads = message;
+                // }
             }
             EventType::TABLE_MAP_EVENT => {
-                let event = event.read_event::<TableMapEvent>()?;
-                let result = self.parse_table_map_event(event.into_owned());
-                if let Err(e) = result {
-                    error!("Error parsing table map event: {:?}", e);
-                }
+                let event = event.read_table_map_event()?;
+                // let result = self.parse_table_map_event(event);
+                // if let Err(e) = result {
+                //     error!("Error parsing table map event: {:?}", e);
+                // }
             }
             EventType::ROTATE_EVENT => {
-                let event = &event.read_event::<RotateEvent>()?;
+                let event = &event.read_rotate_event()?;
                 let result = self.parse_rotate_event(event);
                 if let Err(e) = result {
                     error!("Error parsing rotate event: {:?}", e);
                 }
             }
             EventType::WRITE_ROWS_EVENT => {
-                let event = &event.read_event::<WriteRowsEvent>()?;
+                let event = &event.read_write_rows_event()?;
                 let event = RowsEvent::Write(event.clone());
 
                 match self.parse_rows_event(&event, ts, log_pos) {
@@ -105,7 +223,7 @@ impl MySQLSourceConnector {
                 }
             }
             EventType::UPDATE_ROWS_EVENT => {
-                let event = &event.read_event::<UpdateRowsEvent>()?;
+                let event = &event.read_update_rows_event()?;
                 let event = RowsEvent::Update(event.clone());
 
                 match self.parse_rows_event(&event, ts, log_pos) {
@@ -118,7 +236,7 @@ impl MySQLSourceConnector {
                 }
             }
             EventType::DELETE_ROWS_EVENT => {
-                let event = &event.read_event::<DeleteRowsEvent>()?;
+                let event = &event.read_delete_rows_event()?;
                 let event = RowsEvent::Delete(event.clone());
 
                 match self.parse_rows_event(&event, ts, log_pos) {
@@ -321,14 +439,14 @@ impl MySQLSourceConnector {
 
     fn parse_query_event(
         &mut self,
-        event: &QueryEvent,
+        event: impl QueryEventInterface<'static>,
         ts: u64,
         log_pos: u64,
     ) -> DMSRResult<Vec<ConnectorOutput>> {
-        debug!("QUERY_EVENT: {:?}\n", event);
         let schema = event.schema().to_string();
         let query = event.query().to_string();
-        self.parse_ddl_query(&schema, &query, ts, log_pos)
+        Ok(vec![])
+        // self.parse_ddl_query(&schema, &query, ts, log_pos)
     }
 
     pub(crate) fn parse_ddl_query(
@@ -353,8 +471,7 @@ impl MySQLSourceConnector {
             } => {
                 let (schema, table) = Self::parse_schema_table_from_sqlparser(schema, name)?;
                 self.parse_create_table_statement(&schema, &table, columns, constraints)?;
-                let msg =
-                    self.query_event_to_kafka_message(&schema, &table, query, ts, log_pos)?;
+                let msg = self.query_event_to_kafka_message(&schema, &table, query, ts, log_pos)?;
                 Ok(vec![msg])
             }
             Statement::AlterTable {
@@ -362,8 +479,7 @@ impl MySQLSourceConnector {
             } => {
                 let (schema, table) = Self::parse_schema_table_from_sqlparser(schema, name)?;
                 self.parse_alter_table_statement(&schema, &table, operation)?;
-                let msg =
-                    self.query_event_to_kafka_message(&schema, &table, query, ts, log_pos)?;
+                let msg = self.query_event_to_kafka_message(&schema, &table, query, ts, log_pos)?;
                 Ok(vec![msg])
             }
             Statement::Drop {

@@ -1,7 +1,7 @@
-use crate::connector::source_connector::SourceConnector;
 use crate::connector::mysql_source::binlog_struct::MySQLTable;
 use crate::connector::mysql_source::config::MySQLSourceConfig;
 use crate::connector::output::OutputEncoding;
+use crate::connector::source_connector::SourceConnector;
 use crate::error::DMSRResult;
 use crate::kafka::kafka_client::Kafka;
 use async_trait::async_trait;
@@ -77,7 +77,8 @@ impl SourceConnector for MySQLSourceConnector {
     }
 
     async fn stream(&mut self, kafka: &Kafka) -> DMSRResult<()> {
-        let mut binlog_stream = self.get_binlog_stream().await?;
+        let conn = self.pool.get_conn().await?;
+        let mut binlog_stream = self.get_binlog_stream(conn).await?;
 
         debug!("Reading historical schema changes...");
         self.read_historical_schema_changes(kafka).await?;

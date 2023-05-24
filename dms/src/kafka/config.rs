@@ -1,4 +1,3 @@
-use crate::kafka::kafka_client::Kafka;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
@@ -33,5 +32,24 @@ impl KafkaConfig {
             offset_topic,
             status_topic,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default() {
+        let config = KafkaConfig::default();
+        assert_eq!(
+            config,
+            KafkaConfig::new(
+                "localhost:9092".to_string(),
+                "dmsr_config".to_string(),
+                "dmsr_offset".to_string(),
+                "dmsr_status".to_string(),
+            )
+        );
     }
 }

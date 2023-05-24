@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 #[async_trait]
-pub(crate) trait MySQLConnSnapshot {
+pub(crate) trait MySQLConnInterface {
     async fn query_drop(&mut self, query: &str) -> DMSRResult<()>;
     async fn query<T>(&mut self, query: &str) -> DMSRResult<Vec<T>>
     where
@@ -26,7 +26,7 @@ pub(crate) trait MySQLConnSnapshot {
 }
 
 #[async_trait]
-impl MySQLConnSnapshot for Conn {
+impl MySQLConnInterface for Conn {
     async fn query_drop(&mut self, query: &str) -> DMSRResult<()> {
         Queryable::query_drop(self, query).await?;
         Ok(())
@@ -47,7 +47,7 @@ impl MySQLConnSnapshot for Conn {
 }
 
 #[async_trait]
-pub(crate) trait KafkaSnapshot {
+pub(crate) trait KafkaInterface {
     fn config(&self) -> &KafkaConfig;
 
     async fn poll_with_timeout(
@@ -60,7 +60,7 @@ pub(crate) trait KafkaSnapshot {
 }
 
 #[async_trait]
-impl KafkaSnapshot for Kafka {
+impl KafkaInterface for Kafka {
     fn config(&self) -> &KafkaConfig {
         self.config()
     }
@@ -78,10 +78,10 @@ impl KafkaSnapshot for Kafka {
     }
 }
 
-impl MySQLSourceConnector {
+impl<'a, 'b: 'a> MySQLSourceConnector {
     pub(crate) async fn get_latest_binlog_info(
         &self,
-        kafka: &impl KafkaSnapshot,
+        kafka: &impl KafkaInterface,
     ) -> DMSRResult<(String, u64)> {
         let config = kafka.config();
 
@@ -108,7 +108,7 @@ impl MySQLSourceConnector {
         Ok((String::new(), 0))
     }
 
-    pub(crate) async fn lock_tables(&self, conn: &mut impl MySQLConnSnapshot) -> DMSRResult<()> {
+    pub(crate) async fn lock_tables(&self, conn: &mut impl MySQLConnInterface) -> DMSRResult<()> {
         conn.query_drop("FLUSH TABLES WITH READ LOCK").await?;
         conn.query_drop("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .await?;
@@ -117,12 +117,12 @@ impl MySQLSourceConnector {
         Ok(())
     }
 
-    pub(crate) async fn unlock_tables(&self, conn: &mut impl MySQLConnSnapshot) -> DMSRResult<()> {
+    pub(crate) async fn unlock_tables(&self, conn: &mut impl MySQLConnInterface) -> DMSRResult<()> {
         conn.query_drop("UNLOCK TABLES").await?;
         Ok(())
     }
 
-    pub(crate) async fn finish_snapshot(&self, mut conn: impl MySQLConnSnapshot) -> DMSRResult<()> {
+    pub(crate) async fn finish_snapshot(&self, mut conn: impl MySQLConnInterface) -> DMSRResult<()> {
         conn.query_drop("COMMIT").await?;
         conn.disconnect().await?;
         Ok(())
@@ -130,7 +130,7 @@ impl MySQLSourceConnector {
 
     pub(crate) async fn read_binlog(
         &self,
-        conn: &mut impl MySQLConnSnapshot,
+        conn: &mut impl MySQLConnInterface,
     ) -> DMSRResult<(String, u64)> {
         let query = "SHOW MASTER STATUS";
         let master_status: Vec<(String, u64, String, String, String)> = conn.query(query).await?;
@@ -143,7 +143,7 @@ impl MySQLSourceConnector {
 
     pub(crate) async fn read_schemas(
         &self,
-        conn: &mut impl MySQLConnSnapshot,
+        conn: &mut impl MySQLConnInterface,
     ) -> DMSRResult<Vec<String>> {
         let query = r#"
             SELECT schema_name FROM information_schema.schemata
@@ -158,7 +158,7 @@ impl MySQLSourceConnector {
 
     pub(crate) async fn read_tables(
         &self,
-        conn: &mut impl MySQLConnSnapshot,
+        conn: &mut impl MySQLConnInterface,
     ) -> DMSRResult<Vec<(String, String)>> {
         let query = r#"
             SELECT table_schema, table_name
@@ -174,7 +174,7 @@ impl MySQLSourceConnector {
 
     pub(crate) async fn read_columns(
         &self,
-        conn: &mut impl MySQLConnSnapshot,
+        conn: &mut impl MySQLConnInterface,
     ) -> DMSRResult<HashMap<(String, String), Vec<String>>> {
         let query = r#"
             SELECT table_schema, table_name, column_name
@@ -197,8 +197,8 @@ impl MySQLSourceConnector {
 
     pub(crate) async fn read_ddls(
         &self,
-        kafka: &impl KafkaSnapshot,
-        conn: &mut impl MySQLConnSnapshot,
+        kafka: &impl KafkaInterface,
+        conn: &mut impl MySQLConnInterface,
         binlog_name: &str,
         binlog_pos: &u64,
         tables: &[(String, String)],
@@ -236,8 +236,8 @@ impl MySQLSourceConnector {
 
     pub(crate) async fn read_table_data(
         &self,
-        kafka: &impl KafkaSnapshot,
-        conn: &mut impl MySQLConnSnapshot,
+        kafka: &impl KafkaInterface,
+        conn: &mut impl MySQLConnInterface,
         columns: &HashMap<(String, String), Vec<String>>,
         binlog_name: &str,
         binlog_pos: &u64,
@@ -291,7 +291,7 @@ impl MySQLSourceConnector {
 
     pub(crate) async fn update_offsets(
         &self,
-        kafka: &impl KafkaSnapshot,
+        kafka: &impl KafkaInterface,
         binlog_name: &str,
         binlog_pos: &u64,
     ) -> DMSRResult<()> {
@@ -330,7 +330,7 @@ mod tests {
     mock! {
         Conn {}
         #[async_trait]
-        impl MySQLConnSnapshot for Conn {
+        impl MySQLConnInterface for Conn {
             async fn query_drop(&mut self, query: &str) -> DMSRResult<()>;
             async fn query<T>(&mut self, query: &str) -> DMSRResult<Vec<T>>
             where
@@ -342,7 +342,7 @@ mod tests {
     mock! {
         Kafka {}
         #[async_trait]
-        impl KafkaSnapshot for Kafka {
+        impl KafkaInterface for Kafka {
             fn config(&self) -> &KafkaConfig;
 
             async fn poll_with_timeout(
