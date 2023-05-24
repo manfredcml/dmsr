@@ -21,8 +21,8 @@ use mysql_common::binlog::events::{BinlogEventHeader, FormatDescriptionEvent};
 use mysql_common::binlog::BinlogEvent;
 use serde_json::json;
 use sqlparser::ast::{
-    AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, DataType, Ident,
-    ObjectName, ObjectType, Statement, Table, TableConstraint,
+    AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, Ident, ObjectName,
+    ObjectType, Statement, TableConstraint,
 };
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
@@ -158,10 +158,7 @@ impl MySQLSourceConnector {
         Ok(())
     }
 
-    pub(crate) fn parse(
-        &mut self,
-        event: impl EventInterface,
-    ) -> DMSRResult<Vec<ConnectorOutput>> {
+    pub(crate) fn parse(&mut self, event: impl EventInterface) -> DMSRResult<Vec<ConnectorOutput>> {
         let ts = 1000 * (event.fde().create_timestamp() as u64);
         let log_pos = event.header().log_pos() as u64;
         let event_type = event.header().event_type()?;
@@ -176,11 +173,10 @@ impl MySQLSourceConnector {
             }
             EventType::TABLE_MAP_EVENT => {
                 let event = event.read_event::<TableMapEvent>()?;
-                // self.last_table_map_event = Some(event.clone());
-                // let result = self.parse_table_map_event(event);
-                // if let Err(e) = result {
-                //     error!("Error parsing table map event: {:?}", e);
-                // }
+                let result = self.parse_table_map_event(event);
+                if let Err(e) = result {
+                    error!("Error parsing table map event: {:?}", e);
+                }
             }
             EventType::ROTATE_EVENT => {
                 let event = &event.read_event::<RotateEvent>()?;
@@ -412,8 +408,8 @@ impl MySQLSourceConnector {
         Ok(())
     }
 
-    fn parse_table_map_event(&mut self, event: TableMapEvent<'static>) -> DMSRResult<()> {
-        self.last_table_map_event = Some(event.clone());
+    fn parse_table_map_event<'a>(&'a mut self, event: TableMapEvent<'a>) -> DMSRResult<()> {
+        self.last_table_map_event = Some(event.into_owned());
         Ok(())
     }
 
@@ -423,8 +419,8 @@ impl MySQLSourceConnector {
         ts: u64,
         log_pos: u64,
     ) -> DMSRResult<Vec<ConnectorOutput>> {
-        let schema = event.schema().to_string();
-        let query = event.query().to_string();
+        let schema = event.schema();
+        let query = event.query();
         self.parse_ddl_query(&schema, &query, ts, log_pos)
     }
 

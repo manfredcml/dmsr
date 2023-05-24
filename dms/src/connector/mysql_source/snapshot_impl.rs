@@ -78,7 +78,7 @@ impl KafkaInterface for Kafka {
     }
 }
 
-impl<'a, 'b: 'a> MySQLSourceConnector {
+impl MySQLSourceConnector {
     pub(crate) async fn get_latest_binlog_info(
         &self,
         kafka: &impl KafkaInterface,

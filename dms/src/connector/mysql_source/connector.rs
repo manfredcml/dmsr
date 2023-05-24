@@ -10,6 +10,7 @@ use log::debug;
 use mysql_async::binlog::events::TableMapEvent;
 use mysql_async::Pool;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct MySQLSourceConnector {
     pub(crate) config: MySQLSourceConfig,
