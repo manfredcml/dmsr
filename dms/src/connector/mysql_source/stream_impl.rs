@@ -18,10 +18,11 @@ use mysql_async::binlog::value::BinlogValue;
 use mysql_async::binlog::EventType;
 use mysql_async::{BinlogRequest, BinlogStream, Conn, Value};
 use mysql_common::binlog::events::{BinlogEventHeader, FormatDescriptionEvent};
+use mysql_common::binlog::BinlogEvent;
 use serde_json::json;
 use sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, DataType, Ident,
-    ObjectName, ObjectType, Statement, TableConstraint,
+    ObjectName, ObjectType, Statement, Table, TableConstraint,
 };
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
@@ -88,12 +89,7 @@ impl MySQLInterface for Conn {
 pub(crate) trait EventInterface {
     fn fde(&self) -> &FormatDescriptionEvent;
     fn header(&self) -> BinlogEventHeader;
-    fn read_query_event(&self) -> Result<QueryEvent, Error>;
-    fn read_table_map_event(&self) -> Result<TableMapEvent, Error>;
-    fn read_rotate_event(&self) -> Result<RotateEvent, Error>;
-    fn read_write_rows_event(&self) -> Result<WriteRowsEvent, Error>;
-    fn read_update_rows_event(&self) -> Result<UpdateRowsEvent, Error>;
-    fn read_delete_rows_event(&self) -> Result<DeleteRowsEvent, Error>;
+    fn read_event<'a, 'b: 'a, T: BinlogEvent<'a>>(&'b self) -> Result<T, Error>;
 }
 
 impl EventInterface for Event {
@@ -105,28 +101,9 @@ impl EventInterface for Event {
         self.header()
     }
 
-    fn read_query_event(&self) -> Result<QueryEvent, Error> {
-        self.read_event::<QueryEvent>()
-    }
-
-    fn read_table_map_event(&self) -> Result<TableMapEvent, Error> {
-        self.read_event::<TableMapEvent>()
-    }
-
-    fn read_rotate_event(&self) -> Result<RotateEvent, Error> {
-        self.read_event::<RotateEvent>()
-    }
-
-    fn read_write_rows_event(&self) -> Result<WriteRowsEvent, Error> {
-        self.read_event::<WriteRowsEvent>()
-    }
-
-    fn read_update_rows_event(&self) -> Result<UpdateRowsEvent, Error> {
-        self.read_event::<UpdateRowsEvent>()
-    }
-
-    fn read_delete_rows_event(&self) -> Result<DeleteRowsEvent, Error> {
-        self.read_event::<DeleteRowsEvent>()
+    fn read_event<'a, 'b: 'a, T: BinlogEvent<'a>>(&'b self) -> Result<T, Error> {
+        let event = self.read_event::<T>()?;
+        Ok(event)
     }
 }
 
@@ -181,7 +158,10 @@ impl MySQLSourceConnector {
         Ok(())
     }
 
-    pub(crate) fn parse(&mut self, event: impl EventInterface) -> DMSRResult<Vec<ConnectorOutput>> {
+    pub(crate) fn parse(
+        &mut self,
+        event: impl EventInterface,
+    ) -> DMSRResult<Vec<ConnectorOutput>> {
         let ts = 1000 * (event.fde().create_timestamp() as u64);
         let log_pos = event.header().log_pos() as u64;
         let event_type = event.header().event_type()?;
@@ -189,28 +169,28 @@ impl MySQLSourceConnector {
         let mut payloads: Vec<ConnectorOutput> = vec![];
         match event_type {
             EventType::QUERY_EVENT => {
-                // let event = event.read_query_event()?;
-                // self.testing(event);
-                // if let Ok(message) = self.parse_query_event(event, ts, log_pos) {
-                //     payloads = message;
-                // }
+                let event = event.read_event::<QueryEvent>()?;
+                if let Ok(message) = self.parse_query_event(event, ts, log_pos) {
+                    payloads = message;
+                }
             }
             EventType::TABLE_MAP_EVENT => {
-                let event = event.read_table_map_event()?;
+                let event = event.read_event::<TableMapEvent>()?;
+                // self.last_table_map_event = Some(event.clone());
                 // let result = self.parse_table_map_event(event);
                 // if let Err(e) = result {
                 //     error!("Error parsing table map event: {:?}", e);
                 // }
             }
             EventType::ROTATE_EVENT => {
-                let event = &event.read_rotate_event()?;
+                let event = &event.read_event::<RotateEvent>()?;
                 let result = self.parse_rotate_event(event);
                 if let Err(e) = result {
                     error!("Error parsing rotate event: {:?}", e);
                 }
             }
             EventType::WRITE_ROWS_EVENT => {
-                let event = &event.read_write_rows_event()?;
+                let event = &event.read_event::<WriteRowsEvent>()?;
                 let event = RowsEvent::Write(event.clone());
 
                 match self.parse_rows_event(&event, ts, log_pos) {
@@ -223,7 +203,7 @@ impl MySQLSourceConnector {
                 }
             }
             EventType::UPDATE_ROWS_EVENT => {
-                let event = &event.read_update_rows_event()?;
+                let event = &event.read_event::<UpdateRowsEvent>()?;
                 let event = RowsEvent::Update(event.clone());
 
                 match self.parse_rows_event(&event, ts, log_pos) {
@@ -236,7 +216,7 @@ impl MySQLSourceConnector {
                 }
             }
             EventType::DELETE_ROWS_EVENT => {
-                let event = &event.read_delete_rows_event()?;
+                let event = &event.read_event::<DeleteRowsEvent>()?;
                 let event = RowsEvent::Delete(event.clone());
 
                 match self.parse_rows_event(&event, ts, log_pos) {
@@ -433,20 +413,19 @@ impl MySQLSourceConnector {
     }
 
     fn parse_table_map_event(&mut self, event: TableMapEvent<'static>) -> DMSRResult<()> {
-        self.last_table_map_event = Some(event);
+        self.last_table_map_event = Some(event.clone());
         Ok(())
     }
 
-    fn parse_query_event(
+    fn parse_query_event<'a>(
         &mut self,
-        event: impl QueryEventInterface<'static>,
+        event: impl QueryEventInterface<'a>,
         ts: u64,
         log_pos: u64,
     ) -> DMSRResult<Vec<ConnectorOutput>> {
         let schema = event.schema().to_string();
         let query = event.query().to_string();
-        Ok(vec![])
-        // self.parse_ddl_query(&schema, &query, ts, log_pos)
+        self.parse_ddl_query(&schema, &query, ts, log_pos)
     }
 
     pub(crate) fn parse_ddl_query(
