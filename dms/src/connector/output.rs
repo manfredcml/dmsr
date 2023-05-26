@@ -7,7 +7,7 @@ use crate::kafka::message::KafkaMessage;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub enum ConnectorOutput {
     MySQLRowData(MySQLRowDataOutput),
     MySQLDDL(MySQLDDLOutput),

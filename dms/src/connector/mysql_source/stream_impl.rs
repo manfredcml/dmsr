@@ -55,7 +55,7 @@ impl KafkaInterface for Kafka {
 }
 
 #[async_trait]
-pub(crate) trait MySQLInterface {
+pub(crate) trait MySQLConnInterface {
     async fn get_binlog_stream(
         mut self,
         server_id: u32,
@@ -65,7 +65,7 @@ pub(crate) trait MySQLInterface {
 }
 
 #[async_trait]
-impl MySQLInterface for Conn {
+impl MySQLConnInterface for Conn {
     async fn get_binlog_stream(
         mut self,
         server_id: u32,
@@ -125,7 +125,7 @@ impl<'a> QueryEventInterface<'a> for QueryEvent<'a> {
 impl MySQLSourceConnector {
     pub(crate) async fn get_binlog_stream(
         &self,
-        conn: impl MySQLInterface,
+        conn: impl MySQLConnInterface,
     ) -> DMSRResult<BinlogStream> {
         let cdc_stream = conn
             .get_binlog_stream(
@@ -408,7 +408,7 @@ impl MySQLSourceConnector {
         Ok(())
     }
 
-    fn parse_table_map_event<'a>(&'a mut self, event: TableMapEvent<'a>) -> DMSRResult<()> {
+    fn parse_table_map_event(&mut self, event: TableMapEvent) -> DMSRResult<()> {
         self.last_table_map_event = Some(event.into_owned());
         Ok(())
     }
@@ -860,5 +860,224 @@ impl MySQLSourceConnector {
 
     pub fn set_binlog_file_name(&mut self, binlog_file_name: String) {
         self.binlog_file_name = Some(binlog_file_name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use super::*;
+    use crate::connector::mysql_source::config::MySQLSourceConfig;
+    use crate::connector::source_connector::SourceConnector;
+    use mockall::mock;
+    use mockall::predicate::*;
+
+    mock! {
+        Conn {}
+        #[async_trait]
+        impl MySQLConnInterface for Conn {
+            async fn get_binlog_stream<'a>(
+                mut self,
+                server_id: u32,
+                binlog_pos: Option<u64>,
+                binlog_name: Option<&'a String>,
+            ) -> DMSRResult<BinlogStream>;
+        }
+    }
+
+    mock! {
+        Kafka {}
+        #[async_trait]
+        impl KafkaInterface for Kafka {
+            async fn poll_with_timeout(
+                &self,
+                topic: &str,
+                timeout: u64,
+            ) -> DMSRResult<Vec<RawKafkaMessageKeyValue>>;
+        }
+    }
+
+    mock! {
+        QueryEvent {}
+        impl<'a> QueryEventInterface<'a> for QueryEvent {
+            fn schema(&self) -> String;
+            fn query(&self) -> String;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_historical_schema_changes() {
+        let mut mock_kafka = MockKafka::new();
+        let test_connector_name = "test_connector";
+
+        let key = r#"{"schema": "test_schema"}"#;
+        let value = r#"{
+            "ddl": "CREATE TABLE test",
+            "ts_ms": 1,
+            "metadata": {
+                "connector_type": "mysql_source",
+                "connector_name": "test_connector",
+                "db": "test_db",
+                "schema": "test_schema",
+                "table": "test_table",
+                "server_id": 1,
+                "file": "log.000001",
+                "pos": 1
+            }}
+        "#;
+
+        let test_msg = RawKafkaMessageKeyValue {
+            key: key.into(),
+            value: value.into(),
+        };
+
+        mock_kafka
+            .expect_poll_with_timeout()
+            .with(eq(test_connector_name), eq(1))
+            .times(1)
+            .return_once(|_, _| Ok(vec![test_msg]));
+
+        let mut connector =
+            MySQLSourceConnector::new(test_connector_name.into(), MySQLSourceConfig::default())
+                .await
+                .unwrap();
+
+        connector.binlog_file_name = Some("log.000001".into());
+
+        connector
+            .read_historical_schema_changes(&mock_kafka)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_historical_schema_changes_error() {
+        let mut mock_kafka = MockKafka::new();
+        let test_connector_name = "test_connector";
+
+        let mut connector =
+            MySQLSourceConnector::new(test_connector_name.into(), MySQLSourceConfig::default())
+                .await
+                .unwrap();
+
+        connector.binlog_file_name = Some("log.000001".into());
+
+        // Case 1: Invalid JSON
+        let test_msg = RawKafkaMessageKeyValue::new("".into(), "".into());
+
+        mock_kafka
+            .expect_poll_with_timeout()
+            .with(eq(test_connector_name), eq(1))
+            .times(1)
+            .return_once(|_, _| Ok(vec![test_msg]));
+
+        let result = connector.read_historical_schema_changes(&mock_kafka).await;
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(DMSRError::SerdeJsonError(_))));
+
+        // Case 2: Schema is missing from key
+        let test_msg = RawKafkaMessageKeyValue::new(r#"{"test": 1}"#.into(), "".into());
+
+        mock_kafka
+            .expect_poll_with_timeout()
+            .with(eq(test_connector_name), eq(1))
+            .times(1)
+            .return_once(|_, _| Ok(vec![test_msg]));
+
+        let result = connector.read_historical_schema_changes(&mock_kafka).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(DMSRError::MySQLSourceConnectorError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_parse_ddl_query_create_table() {
+        let schema = "test_schema";
+        let query = "CREATE TABLE test_table (id INT PRIMARY KEY, name VARCHAR(255))";
+        let ts: u64 = 123;
+        let log_pos: u64 = 1;
+
+        let mut connector =
+            MySQLSourceConnector::new("test_connector".into(), MySQLSourceConfig::default())
+                .await
+                .unwrap();
+        connector.binlog_file_name = Some("log.000001".into());
+
+        let msg = connector
+            .parse_ddl_query(schema, query, ts, log_pos)
+            .unwrap();
+
+        assert_eq!(msg.len(), 1);
+
+        let expected_output = MySQLDDLOutput::new(
+            "CREATE TABLE test_table (id INT PRIMARY KEY, name VARCHAR(255))".into(),
+            123,
+            MySQLSourceMetadata::new(
+                "test_connector",
+                "mysql",
+                "test_schema",
+                "test_table",
+                0,
+                "log.000001",
+                1,
+            ),
+        );
+
+        assert_eq!(msg[0], ConnectorOutput::MySQLDDL(expected_output));
+    }
+
+    #[tokio::test]
+    async fn test_parse_ddl_query_alter_table() {
+        let schema = "test_schema";
+        let query = "ALTER TABLE test_table ADD COLUMN age INT";
+        let ts: u64 = 1;
+        let log_pos: u64 = 1;
+
+        let mut connector =
+            MySQLSourceConnector::new("test_connector".into(), MySQLSourceConfig::default())
+                .await
+                .unwrap();
+        connector.binlog_file_name = Some("log.000001".into());
+        connector.table_metadata_map = HashMap::new();
+        connector
+            .table_metadata_map
+            .insert("test_schema.test_table".into(), MySQLTable {
+                schema_name: "test_schema".to_string(),
+                table_name: "test_table".to_string(),
+                columns: vec![
+                    MySQLTableColumn {
+                        column_name: "id".to_string(),
+                        data_type: "".to_string(),
+                        is_nullable: false,
+                        is_primary_key: false,
+                    }
+                ],
+            });
+
+        let msg = connector
+            .parse_ddl_query(schema, query, ts, log_pos)
+            .unwrap();
+
+        assert_eq!(msg.len(), 1);
+
+        let expected_output = MySQLDDLOutput::new(
+            query.into(),
+            123,
+            MySQLSourceMetadata::new(
+                "test_connector",
+                "mysql",
+                "test_schema",
+                "test_table",
+                0,
+                "log.000001",
+                1,
+            ),
+        );
+
+        assert_eq!(msg[0], ConnectorOutput::MySQLDDL(expected_output));
     }
 }
